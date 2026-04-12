@@ -26,12 +26,12 @@ class Agent2Character(BaseAgent):
             "agent_id": 2,
             "character_goal": parsed.get("character_goal", ""),
             "truth_judgment": None,
-            "update_log": parsed.get("update_log", []),
-            "belief_state": parsed.get("belief_state", ""),
-            "reasoning": parsed.get("reasoning", ""),
+            "update_log": parsed.get("belief_update_log", []),          # ← update_log → belief_update_log
+            "belief_state": parsed.get("final_belief_state", []),       # ← belief_state → final_belief_state
+            "reasoning": parsed.get("answer", {}).get("rationale", ""), # ← answer.rationale
             "tom_answers": {
-                "q1_belief": parsed.get("tom_answers", {}).get("q1_belief", ""),
-                "q2_desire": parsed.get("tom_answers", {}).get("q2_desire", ""),
-                "q3_action": parsed.get("tom_answers", {}).get("q3_action", "")
+                "q1_belief": parsed.get("answer", {}).get("response", ""),
+                "q2_desire": parsed.get("answer", {}).get("question_order", ""),
+                "q3_action": parsed.get("answer", {}).get("question", "")
             }
         }

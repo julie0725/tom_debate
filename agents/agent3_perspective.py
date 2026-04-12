@@ -24,14 +24,14 @@ class Agent3Perspective(BaseAgent):
 
         return {
             "agent_id": 3,
-            "character_goal": parsed.get("character_goal", ""),
+            "character_goal": parsed.get("focal_character", ""),              # ← character_goal 없음, focal_character로 대체
             "truth_judgment": None,
-            "update_log": parsed.get("update_log", []),
-            "belief_state": parsed.get("belief_state", ""),
-            "reasoning": parsed.get("reasoning", ""),
+            "update_log": parsed.get("intermediate_simulations", []),         # ← intermediate_simulations
+            "belief_state": parsed.get("higher_order_beliefs", []),           # ← higher_order_beliefs
+            "reasoning": parsed.get("answer", {}).get("rationale", ""),       # ← answer.rationale
             "tom_answers": {
-                "q1_belief": parsed.get("tom_answers", {}).get("q1_belief", ""),
-                "q2_desire": parsed.get("tom_answers", {}).get("q2_desire", ""),
-                "q3_action": parsed.get("tom_answers", {}).get("q3_action", "")
+                "q1_belief": parsed.get("answer", {}).get("response", ""),
+                "q2_desire": parsed.get("answer", {}).get("question_order", ""),
+                "q3_action": parsed.get("answer", {}).get("question", "")
             }
         }

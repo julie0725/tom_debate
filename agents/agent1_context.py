@@ -30,13 +30,13 @@ class Agent1Context(BaseAgent):
         return {
             "agent_id": 1,
             "character_goal": parsed.get("character_goal", ""),
-            "truth_judgment": parsed.get("truth_judgment", None),
+            "truth_judgment": parsed.get("event_judgments", []),   # ← truth_judgment → event_judgments
             "update_log": [],
             "belief_state": None,
-            "reasoning": parsed.get("reasoning", ""),
+            "reasoning": parsed.get("answer", {}).get("rationale", ""),  # ← reasoning 소스 변경
             "tom_answers": {
-                "q1_belief": parsed.get("tom_answers", {}).get("q1_belief", ""),
-                "q2_desire": parsed.get("tom_answers", {}).get("q2_desire", ""),
-                "q3_action": parsed.get("tom_answers", {}).get("q3_action", "")
+                "q1_belief": parsed.get("answer", {}).get("response", ""),   # ← 스키마에 맞게 변경
+                "q2_desire": parsed.get("answer", {}).get("question_order", ""),
+                "q3_action": parsed.get("answer", {}).get("question", "")
             }
         }
