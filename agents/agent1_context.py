@@ -22,7 +22,7 @@ class Agent1Context(BaseAgent):
         debate_context: 토론 시 다른 에이전트 출력 포함
         반환: AgentOutput 형식 dict
         """
-        user_prompt = self._build_user_prompt(state_dict, debate_context)
+        user_prompt = self._build_user_prompt(state_dict)
         raw = self._call_llm(user_prompt)
         parsed = self._parse_json_response(raw)
 

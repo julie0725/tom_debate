@@ -68,6 +68,20 @@ class MessagePool:
             if self._state:
                 self._state.debate_round = round_num
 
+    def update_debate_context(self, debate_context: dict) -> None:
+        """감독관이 라운드별 debate_context를 MessagePool에 저장 (에이전트간 직접 전달 대체)"""
+        with self._lock:
+            if self._state:
+                self._state.debate_context = debate_context
+                logger.debug(f"[MessagePool] debate_context updated | round={debate_context.get('round')}")
+
+    def update_supervisor_correction(self, correction: str) -> None:
+        """감독관이 max_rounds 초과 후 오류 분석 결과를 context file에 기록"""
+        with self._lock:
+            if self._state:
+                self._state.supervisor_correction = correction
+                logger.info("[MessagePool] supervisor_correction updated")
+
     def set_final_answer(self, final_answer) -> None:
         with self._lock:
             if self._state:
