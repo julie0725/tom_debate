@@ -17,20 +17,20 @@
 
 ## Agent Outputs
 ### agent1
-- Goal: Sally's goal is to find her marble.
+- Goal: Sally wants to find her marble
 - Belief State: None
 - Q1: A
 - Q2: A
 - Q3: Sally will look in the basket
 ### agent2
-- Goal: Sally wants to find her marble
-- Belief State: Sally believes her marble is in the basket.
+- Goal: Sally wants to find her marble.
+- Belief State: Sally believes the marble is in the basket.
 - Q1: A
 - Q2: A
 - Q3: Sally will look in the basket
 ### agent3
 - Goal: Sally
-- Belief State: Sally believes the marble is in the basket.
+- Belief State: Sally believes her marble is in the basket where she left it.
 - Q1: A
 - Q2: A
 - Q3: Sally will look in the basket
