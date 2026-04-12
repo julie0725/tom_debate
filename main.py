@@ -98,9 +98,10 @@ def run_single(config: dict):
     print(f"  Q3 (Action)    : {result.final_answer.q3_action}")
     print("="*50)
 
-
+# Big-ToM ver.
+"""
 def run_batch(config: dict, dataset_path: str):
-    """데이터셋 전체 실행"""
+    데이터셋 전체 실행
     dataset = load_dataset(dataset_path)
     if not dataset:
         return
@@ -130,7 +131,66 @@ def run_batch(config: dict, dataset_path: str):
     # 전체 평가
     evaluator = Evaluator(output_dir=config["evaluation"]["output_dir"])
     evaluator.evaluate_from_jsonl()
+"""
+# Hi-ToM ver.
+def run_batch(config: dict, dataset_path: str):
+    """Hi-ToM 데이터셋 구조에 최적화된 실행 함수"""
+    
+    # 1. 데이터 로드
+    raw_data = load_dataset(dataset_path)
+    print(f"data 개수 : {len(raw_data)}")
+    # JSON 내의 "data" 키 리스트 추출
+    if isinstance(raw_data, dict) and "data" in raw_data:
+        dataset = raw_data["data"]
+    else:
+        # load_dataset이 이미 리스트를 반환하거나 다른 구조일 경우 대비
+        dataset = raw_data if isinstance(raw_data, list) else []
 
+    if not dataset:
+        logger.error(f"데이터셋이 비어있거나 형식이 잘못되었습니다: {dataset_path}")
+        return
+
+    ai_user = AIUser(config=config)
+
+    for i, sample in enumerate(dataset):
+        # 2. 안전한 ID 추출 (None 방지를 위해 str 변환 및 기본값 설정)
+        # Hi-ToM의 키 이름인 'sample_id'를 우선 사용
+        sample_id = str(sample.get("sample_id", i))
+        
+        logger.info(f"Processing sample {i+1}/{len(dataset)} | id={sample_id}")
+        reset_message_pool()
+
+        # 3. Ground Truth 매핑
+        # Hi-ToM은 샘플당 'answer'가 하나이므로, 이를 q1_belief에 매핑하고 나머지는 빈 문자열 처리
+        # 이렇게 해야 'sequence item 5' 같은 NoneType 에러를 방지할 수 있습니다.
+        ans = sample.get("answer", "")
+        if ans is None: ans = "" # 명시적 None 방지
+        
+        ground_truth = ToMAnswers(
+            q1_belief=str(ans),
+            q2_desire="", 
+            q3_action=""
+        )
+
+        try:
+            # 4. 필드 매핑 (Hi-ToM 키 이름 기준)
+            # .get(key, "")를 사용하여 데이터가 없을 경우 None 대신 빈 문자열이 들어가게 함
+            ai_user.submit(
+                scenario=sample.get("story", ""),    # Hi-ToM 본문
+                q1=sample.get("question", ""),       # Hi-ToM 질문
+                q2="",                               # Hi-ToM에는 Q2, Q3가 없음
+                q3="",
+                dataset_id=sample_id,
+                ground_truth=ground_truth
+            )
+        except Exception as e:
+            # 에러 발생 시 어떤 ID에서 문제가 생겼는지 명확히 출력
+            logger.error(f"Sample {sample_id} failed: {e}")
+            continue
+
+    # 5. 전체 평가 실행
+    evaluator = Evaluator(output_dir=config["evaluation"]["output_dir"])
+    evaluator.evaluate_from_jsonl()
 
 def run_ablation(config: dict, dataset_path: str):
     """Ablation study 실행"""
@@ -152,7 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["single", "batch", "ablation", "eval"],
                         default="single", help="실행 모드")
     parser.add_argument("--config", default="config/config.yaml", help="설정 파일 경로")
-    parser.add_argument("--dataset", default="data/bigtom/dataset.jsonl", help="데이터셋 경로")
+    parser.add_argument("--dataset", default="data/hitom/Hi-ToM_data.json", help="데이터셋 경로") # 나중에 경로 수정
     args = parser.parse_args()
 
     config = load_config(args.config)

@@ -2,3 +2,12 @@
 /.venv
 __pycache__/
 *.pyc
+
+# 데이터는 용량이 커서 github에 올리기 어려움
+# data/bigtom 폴더 내의 모든 파일을 무시하되, .gitkeep 파일만 예외로 둠
+data/bigtom/*
+!data/bigtom/.gitkeep
+
+# data/hitom 폴더도 동일하게 설정
+data/hitom/*
+!data/hitom/.gitkeep
