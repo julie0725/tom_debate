@@ -18,7 +18,7 @@ class Agent3Perspective(BaseAgent):
         super().__init__(agent_id=3, model=model, max_tokens=max_tokens, provider=provider, base_url=base_url)
 
     def reason(self, state_dict: dict, debate_context: dict = None) -> dict:
-        user_prompt = self._build_user_prompt(state_dict, debate_context)
+        user_prompt = self._build_user_prompt(state_dict)
         raw = self._call_llm(user_prompt)
         parsed = self._parse_json_response(raw)
 

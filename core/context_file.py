@@ -75,6 +75,13 @@ class ToMState:
     debate_triggered: bool = False
     majority_vote_applied: bool = False
 
+    # 토론 컨텍스트 (MessagePool을 통해 공유 - 직접 에이전트간 전달 금지)
+    # 구조: {"round": int, "agent1": {"other_outputs": {...}}, "agent2": {...}, "agent3": {...}}
+    debate_context: dict = field(default_factory=dict)
+
+    # 감독관 오류 분석 결과 (max_rounds 초과 시 작성)
+    supervisor_correction: Optional[str] = None
+
     # 최종 답변
     final_answer: ToMAnswers = field(default_factory=ToMAnswers)
 
@@ -111,6 +118,11 @@ class ToMState:
                 lines.append(f"- Q1: {answers.get('q1_belief', 'N/A')}")
                 lines.append(f"- Q2: {answers.get('q2_desire', 'N/A')}")
                 lines.append(f"- Q3: {answers.get('q3_action', 'N/A')}")
+        if self.supervisor_correction:
+            lines.append("")
+            lines.append("## Supervisor Correction")
+            lines.append(self.supervisor_correction)
+
         lines.append("")
         lines.append("## Final Answer")
         lines.append(f"- Q1: {self.final_answer.q1_belief}")
@@ -128,6 +140,8 @@ class ToMState:
         state.status = data.get("status", "pending")
         state.debate_triggered = data.get("debate_triggered", False)
         state.majority_vote_applied = data.get("majority_vote_applied", False)
+        state.debate_context = data.get("debate_context", {})
+        state.supervisor_correction = data.get("supervisor_correction", None)
         state.dataset_id = data.get("dataset_id")
         state.agent_outputs = data.get("agent_outputs", {})
         fa = data.get("final_answer", {})
