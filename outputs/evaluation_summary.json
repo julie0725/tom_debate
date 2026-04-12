@@ -1,0 +1,10 @@
+{
+  "total": 7,
+  "q1_belief_accuracy": 0.5714,
+  "q2_desire_accuracy": 0.4286,
+  "q3_action_accuracy": 0.7143,
+  "joint_accuracy": 0.4286,
+  "debate_trigger_rate": 0.5714,
+  "majority_vote_rate": 0.5714,
+  "avg_debate_rounds": 1.7143
+}
