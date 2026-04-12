@@ -65,9 +65,14 @@ class Supervisor:
         # 감독관 LLM 클라이언트 (provider 무관)
         self.client = get_llm_client(provider=self.provider, base_url=self.base_url)
         self.system_prompt = self._load_prompt()
+        self.correction_prompt = self._load_correction_prompt()
 
     def _load_prompt(self) -> str:
         p = Path(__file__).parent.parent / "prompts" / "supervisor_prompt.txt"
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    def _load_correction_prompt(self) -> str:
+        p = Path(__file__).parent.parent / "prompts" / "supervisor_correction_prompt.txt"
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     # ── 메인 실행 ─────────────────────────────────────────────
@@ -102,7 +107,8 @@ class Supervisor:
             logger.info("[Supervisor] Disagreement detected. Starting debate.")
             final = await self.debate_manager.run_debate(
                 pool=self.pool,
-                supervisor_call_fn=self._call_supervisor
+                supervisor_call_fn=self._call_supervisor,
+                supervisor_correction_fn=self._call_supervisor_correction
             )
             self.pool.set_final_answer(final)
 
@@ -152,6 +158,38 @@ Respond ONLY in valid JSON format.
         except json.JSONDecodeError:
             logger.error(f"[Supervisor] JSON parse error: {raw}")
             return {"agreement": False, "status": "debating", "final_answer": {}}
+
+    def _call_supervisor_correction(self, state: ToMState) -> str:
+        """
+        max_rounds 초과 시 호출
+        - 에이전트 출력의 불일치 원인 분석
+        - context file에 기록할 오류 수정 지침 반환 (plain text)
+        - 이후 에이전트들이 state_dict['supervisor_correction']을 읽고 처음부터 재추론
+        """
+        state_dict = asdict(state)
+        user_content = f"""
+Agents failed to reach consensus after {self.max_rounds} debate rounds.
+
+Scenario:
+{state_dict.get('scenario', '')}
+
+Questions:
+{json.dumps(state_dict.get('questions', {}), ensure_ascii=False, indent=2)}
+
+Agent outputs:
+{json.dumps(state_dict.get('agent_outputs', {}), ensure_ascii=False, indent=2)}
+
+Analyze why the agents disagree, identify the reasoning error(s), and provide clear correction guidance.
+"""
+        correction = call_llm(
+            client=self.client,
+            model=self.model,
+            system_prompt=self.correction_prompt,
+            user_content=user_content,
+            max_tokens=self.max_tokens
+        )
+        logger.info(f"[Supervisor] Correction generated: {correction[:100]}...")
+        return correction
 
     def _extract_final_answer(self, supervisor_result: dict) -> ToMAnswers:
         fa = supervisor_result.get("final_answer", {})

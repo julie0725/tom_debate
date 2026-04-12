@@ -61,18 +61,36 @@ class BaseAgent(ABC):
             logger.error(f"Agent{self.agent_id} JSON parse error: {e}\nRaw: {raw}")
             return {}
 
-    def _build_user_prompt(self, state_dict: dict, debate_context: dict = None) -> str:
+    def _build_user_prompt(self, state_dict: dict) -> str:
         prompt = f"""
 Current context file:
 {json.dumps(state_dict, ensure_ascii=False, indent=2)}
 """
-        if debate_context:
-            prompt += f"""
-[DEBATE CONTEXT - Round {debate_context.get('round', 1)}]
+        # MessagePool 기반 debate_context 읽기 (직접 전달 대신 state_dict에서 추출)
+        pool_ctx = state_dict.get("debate_context", {})
+        if pool_ctx:
+            agent_key = f"agent{self.agent_id}"
+            my_ctx = pool_ctx.get(agent_key, {})
+            other_outputs = my_ctx.get("other_outputs", {})
+            round_num = pool_ctx.get("round", 1)
+            if other_outputs:
+                prompt += f"""
+[DEBATE CONTEXT - Round {round_num}]
 Other agents' outputs for your reference:
-{json.dumps(debate_context.get('other_outputs', {}), ensure_ascii=False, indent=2)}
+{json.dumps(other_outputs, ensure_ascii=False, indent=2)}
 
 Reconsider your answers based on the above. You may update or maintain your position.
 """
+
+        # 감독관 오류 분석 결과 반영 (max_rounds 초과 후 처음부터 재추론 시)
+        if state_dict.get("supervisor_correction"):
+            prompt += f"""
+[SUPERVISOR CORRECTION]
+The supervisor analyzed previous reasoning errors and provides the following guidance:
+{state_dict['supervisor_correction']}
+
+Please re-reason from scratch, carefully incorporating the supervisor's correction.
+"""
+
         prompt += "\nRespond ONLY in valid JSON format.\n"
         return prompt
