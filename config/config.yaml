@@ -1,0 +1,39 @@
+system:
+  # ── 모델 설정 ──────────────────────────────────────────────
+  # provider 하나만 바꾸면 모델 전환 완료
+  #
+  # [OpenAI]
+  #   provider: openai
+  #   model: gpt-3.5-turbo   (or gpt-4o, gpt-4o-mini)
+  #   필요 환경변수: OPENAI_API_KEY
+  #
+  # [Gemini]
+  #   provider: gemini
+  #   model: gemini-1.5-flash   (or gemini-1.5-pro)
+  #   필요 환경변수: GEMINI_API_KEY
+  #
+  # [로컬/커스텀]
+  #   provider: custom
+  #   model: 모델명
+  #   base_url: http://localhost:11434/v1   (예: Ollama)
+  #   필요 환경변수: CUSTOM_API_KEY (없으면 "none" 입력)
+
+  provider: "openai"
+  model: "gpt-3.5-turbo"
+  max_tokens: 2000
+  base_url: null              # custom provider일 때만 입력
+
+debate:
+  max_rounds: 3
+  use_debate: true
+  tiebreak_agent: 3
+
+agents:
+  use_agent1: true
+  use_agent2: true
+  use_agent3: true
+
+evaluation:
+  dataset: "bigtom"
+  output_dir: "outputs/"
+  log_level: "INFO"
