@@ -1,13 +1,6 @@
 """
 supervisor.py
--------------
-감독관 에이전트
-- Agent 1/2/3 병렬 실행 지시
-- 답변 수집 및 일치 여부 판단
-- 토론 trigger 및 최종 답변 결정
-LLM 호출은 core/llm_client.py를 통해 처리 (provider 유동 전환 가능)
 """
-
 import asyncio
 import json
 import logging
@@ -18,6 +11,7 @@ from dataclasses import asdict
 from core.context_file import ToMState, ToMAnswers
 from core.message_pool import MessagePool
 from core.llm_client import get_llm_client, call_llm
+from core.run_logger import RunLogger          # ← 추가
 from agents.agent1_context import Agent1Context
 from agents.agent2_character import Agent2Character
 from agents.agent3_perspective import Agent3Perspective
@@ -41,7 +35,6 @@ class Supervisor:
         self.use_debate = config.get("debate", {}).get("use_debate", True)
         self.tiebreak_agent = config.get("debate", {}).get("tiebreak_agent", 3)
 
-        # 활성화된 Agent만 생성 (ablation 제어)
         agent_cfg = config.get("agents", {})
         self.agents = {}
         if agent_cfg.get("use_agent1", True):
@@ -61,11 +54,13 @@ class Supervisor:
             )
 
         self.debate_manager = DebateManager(self.agents, self.max_rounds, self.tiebreak_agent)
-
-        # 감독관 LLM 클라이언트 (provider 무관)
         self.client = get_llm_client(provider=self.provider, base_url=self.base_url)
         self.system_prompt = self._load_prompt()
         self.correction_prompt = self._load_correction_prompt()
+
+        # ↓ 추가
+        self.run_logger: RunLogger = None
+        self.output_dir = config.get("evaluation", {}).get("output_dir", "outputs/")
 
     def _load_prompt(self) -> str:
         p = Path(__file__).parent.parent / "prompts" / "supervisor_prompt.txt"
@@ -75,14 +70,19 @@ class Supervisor:
         p = Path(__file__).parent.parent / "prompts" / "supervisor_correction_prompt.txt"
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
-    # ── 메인 실행 ─────────────────────────────────────────────
     async def run(self) -> ToMState:
         state = self.pool.get_state()
         if state is None:
-            raise ValueError("No context file in message pool. AI User must publish first.")
+            raise ValueError("No context file in message pool.")
+
+        # ↓ RunLogger 초기화 (추가)
+        self.run_logger = RunLogger(output_dir=self.output_dir, dataset_id=state.dataset_id)
 
         logger.info("[Supervisor] Starting pipeline")
         self.pool.update_status("pending")
+
+        # ↓ 초기 Context File 로그 (추가)
+        self.run_logger.log_context_file(asdict(state), label="initial")
 
         # Step 1: Agent 병렬 추론
         agent_outputs = await self._run_agents_parallel(state)
@@ -90,6 +90,10 @@ class Supervisor:
             self.pool.update_agent_output(agent_id, output)
 
         state = self.pool.get_state()
+
+        # ↓ 초기 추론 결과 로그 (추가)
+        self.run_logger.log_agent_outputs(state.agent_outputs, label="initial")
+        self.run_logger.log_context_file(asdict(state), label="after_initial_reasoning")
 
         # Step 2: 감독관 판단
         supervisor_result = self._call_supervisor(state, debate_round=0)
@@ -108,13 +112,18 @@ class Supervisor:
             final = await self.debate_manager.run_debate(
                 pool=self.pool,
                 supervisor_call_fn=self._call_supervisor,
-                supervisor_correction_fn=self._call_supervisor_correction
+                supervisor_correction_fn=self._call_supervisor_correction,
+                run_logger=self.run_logger    # ← 추가
             )
             self.pool.set_final_answer(final)
 
-        return self.pool.get_state()
+        # ↓ 최종 로그 (추가)
+        final_state = self.pool.get_state()
+        self.run_logger.log_context_file(asdict(final_state), label="final")
+        self.run_logger.log_final_summary(asdict(final_state))
 
-    # ── Agent 병렬 실행 ───────────────────────────────────────
+        return final_state
+
     async def _run_agents_parallel(self, state: ToMState) -> dict:
         state_dict = asdict(state)
 
@@ -128,7 +137,6 @@ class Supervisor:
         results = await asyncio.gather(*tasks)
         return {aid: output for aid, output in results}
 
-    # ── 감독관 LLM 호출 ───────────────────────────────────────
     def _call_supervisor(self, state: ToMState, debate_round: int) -> dict:
         state_dict = asdict(state)
         user_content = f"""
@@ -139,9 +147,9 @@ Current debate_round: {debate_round}
 Max rounds allowed: {self.max_rounds}
 
 Your task:
-- Compare agent answers for q1_belief, q2_desire, q3_action
-- If debate_round >= max_rounds, apply majority vote
-- Otherwise check agreement and decide next step
+- Compare agent answers for q1_belief (= tom_answer), q2_desire, q3_action
+- If all three agents agree on ALL questions → agreement: true
+- Otherwise → agreement: false, trigger debate
 
 Respond ONLY in valid JSON format.
 """
@@ -160,12 +168,6 @@ Respond ONLY in valid JSON format.
             return {"agreement": False, "status": "debating", "final_answer": {}}
 
     def _call_supervisor_correction(self, state: ToMState) -> str:
-        """
-        max_rounds 초과 시 호출
-        - 에이전트 출력의 불일치 원인 분석
-        - context file에 기록할 오류 수정 지침 반환 (plain text)
-        - 이후 에이전트들이 state_dict['supervisor_correction']을 읽고 처음부터 재추론
-        """
         state_dict = asdict(state)
         user_content = f"""
 Agents failed to reach consensus after {self.max_rounds} debate rounds.
@@ -179,7 +181,7 @@ Questions:
 Agent outputs:
 {json.dumps(state_dict.get('agent_outputs', {}), ensure_ascii=False, indent=2)}
 
-Analyze why the agents disagree, identify the reasoning error(s), and provide clear correction guidance.
+Analyze why the agents disagree and provide correction guidance.
 """
         correction = call_llm(
             client=self.client,

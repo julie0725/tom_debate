@@ -17,21 +17,45 @@ class Agent3Perspective(BaseAgent):
     def __init__(self, model: str = "gpt-3.5-turbo", max_tokens: int = 2000, provider: str = "openai", base_url: str = None):
         super().__init__(agent_id=3, model=model, max_tokens=max_tokens, provider=provider, base_url=base_url)
 
+    # 교체
     def reason(self, state_dict: dict, debate_context: dict = None) -> dict:
         user_prompt = self._build_user_prompt(state_dict)
         raw = self._call_llm(user_prompt)
         parsed = self._parse_json_response(raw)
 
+        answer_block = parsed.get("answer", {})
+        tom_answer = answer_block.get("response", "")
+
+        # update_log: {sim_order: {character: {goal, belief}}} 중첩 구조
+        raw_sims = parsed.get("intermediate_simulations", [])
+        update_log = {}
+        if isinstance(raw_sims, list):
+            for sim in raw_sims:
+                agent = sim.get("simulated_agent", "?")
+                order = sim.get("simulation_order", 0)
+                belief = sim.get("derived_belief", "?")
+                evidence = sim.get("evidence_events", [])
+                key = f"{order}" if evidence else f"sim_{order}"
+                if key not in update_log:
+                    update_log[key] = {}
+                update_log[key][agent] = {
+                    "goal": "위치 추적",
+                    "belief": belief,
+                }
+        elif isinstance(raw_sims, dict):
+            update_log = raw_sims
+
         return {
             "agent_id": 3,
-            "character_goal": parsed.get("focal_character", ""),              # ← character_goal 없음, focal_character로 대체
+            "character_goal": parsed.get("focal_character", ""),
             "truth_judgment": None,
-            "update_log": parsed.get("intermediate_simulations", []),         # ← intermediate_simulations
-            "belief_state": parsed.get("higher_order_beliefs", []),           # ← higher_order_beliefs
-            "reasoning": parsed.get("answer", {}).get("rationale", ""),       # ← answer.rationale
+            "update_log": update_log,
+            "belief_state": parsed.get("higher_order_beliefs", []),
+            "tom_answer": tom_answer,
+            "reasoning": answer_block.get("rationale", ""),
             "tom_answers": {
-                "q1_belief": parsed.get("answer", {}).get("response", ""),
-                "q2_desire": parsed.get("answer", {}).get("question_order", ""),
-                "q3_action": parsed.get("answer", {}).get("question", "")
+                "q1_belief": tom_answer,
+                "q2_desire": answer_block.get("q2_desire", ""),
+                "q3_action": answer_block.get("q3_action", ""),
             }
         }
