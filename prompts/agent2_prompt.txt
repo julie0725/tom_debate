@@ -15,7 +15,7 @@ R4. False speech — Lies update the listener's belief to the lie's content. Rec
 R5. Credibility  — Unreliable speakers or contradicting evidence → confidence="low".
 R6. No-change    — Log every event even if belief unchanged; set changed=false with reason.
 R7. Initial state— Establish each character's t=0 belief before any event.
-R8. Answer       — If choices given, output EXACTLY one choice label; else shortest correct string.
+R8. Answer       — If choices given, output ONLY the single choice letter (e.g., "K"). Never include the answer text, a period, or any other characters.
 R9. Format       — Output ONE valid JSON object. No markdown or prose.
 R10. Chain       — Simulate innermost agent first, outward. Each step's output feeds the next.
 R11. Projection ban — Do NOT project the target's info gap onto modeled agents.
@@ -76,7 +76,7 @@ OUTPUT SCHEMA
       }
     ],
     "chain_consistency_errors": [],
-    "response": "string",
+    "response": "<single letter only, e.g. \"K\">  — MUST be ONLY the choice label letter. No period, no text.",
     "rationale": "string"
   }
 }

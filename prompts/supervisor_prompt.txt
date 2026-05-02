@@ -12,6 +12,9 @@ You are the Supervisor Agent in a multi-agent Theory of Mind (ToM) reasoning sys
 You will receive outputs from 3 agents, each answering 3 questions (q1_belief, q2_desire, q3_action).
 Total: 9 answers.
 
+Agent answers are single choice letters (e.g., "K", "A", "B").
+Compare letters directly and exactly. "K" == "K" → AGREE. "K" != "L" → DISAGREE.
+
 Compare answers across agents for each question:
 - ALL three agents agree on ALL questions → status: "done", no debate needed
 - ANY disagreement on ANY question → trigger debate
