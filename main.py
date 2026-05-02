@@ -13,6 +13,7 @@ load_dotenv()  # .env 파일에서 환경 변수 로드
 import argparse
 import json
 import logging
+import re
 import yaml
 from pathlib import Path
 
@@ -32,6 +33,20 @@ logger = logging.getLogger(__name__)
 def load_config(config_path: str = "config/config.yaml") -> dict:
     with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def find_choice_letter(answer_text: str, choices_str: str) -> str:
+    """
+    choices 문자열에서 answer_text와 정확히 일치하는 항목의 레이블 반환.
+    예: "green_drawer", "A. blue_drawer, B. green_crate, ..., K. green_drawer, ..."  → "K"
+    일치하는 항목이 없으면 answer_text 그대로 반환.
+    """
+    for part in choices_str.split(','):
+        part = part.strip()
+        m = re.match(r'^([A-Z]+)\.\s*(.+)$', part)
+        if m and m.group(2).strip() == answer_text.strip():
+            return m.group(1)
+    return answer_text
 
 
 def load_dataset(dataset_path: str) -> list:
@@ -55,7 +70,12 @@ def load_dataset(dataset_path: str) -> list:
     else:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-            samples = data if isinstance(data, list) else [data]
+            if isinstance(data, list):
+                samples = data
+            elif isinstance(data, dict) and "data" in data:
+                samples = data["data"]
+            else:
+                samples = [data]
 
     logger.info(f"Loaded {len(samples)} samples from {dataset_path}")
     return samples
@@ -133,11 +153,24 @@ def run_batch(config: dict, dataset_path: str):
     evaluator.evaluate_from_jsonl()
 """
 # Hi-ToM ver.
-def run_batch(config: dict, dataset_path: str):
+def run_batch(config: dict, dataset_path: str, limit: int = None):
     """Hi-ToM 데이터셋 구조에 최적화된 실행 함수"""
-    
+
+    # 데이터셋 이름 기반으로 결과 파일 분리 및 초기화
+    dataset_name = Path(dataset_path).parent.name
+    results_file = f"results_{dataset_name}.jsonl"
+    if "evaluation" not in config:
+        config["evaluation"] = {}
+    config["evaluation"]["results_file"] = results_file
+    output_dir = Path(config["evaluation"].get("output_dir", "outputs/"))
+    results_path = output_dir / results_file
+    if results_path.exists():
+        results_path.unlink()
+
     # 1. 데이터 로드
     raw_data = load_dataset(dataset_path)
+    if limit:
+        raw_data = raw_data[:limit]
     print(f"data 개수 : {len(raw_data)}")
     # JSON 내의 "data" 키 리스트 추출
     if isinstance(raw_data, dict) and "data" in raw_data:
@@ -161,24 +194,30 @@ def run_batch(config: dict, dataset_path: str):
         reset_message_pool()
 
         # 3. Ground Truth 매핑
-        # Hi-ToM은 샘플당 'answer'가 하나이므로, 이를 q1_belief에 매핑하고 나머지는 빈 문자열 처리
-        # 이렇게 해야 'sequence item 5' 같은 NoneType 에러를 방지할 수 있습니다.
-        ans = sample.get("answer", "")
-        if ans is None: ans = "" # 명시적 None 방지
-        
+        # answer가 단일 대문자 레이블이면 그대로 사용 (Big-ToM: "A", "B")
+        # 텍스트 답변이면 choices로 역매핑하여 레이블로 변환 (Hi-ToM: "green_drawer" → "K")
+        ans = sample.get("answer", "") or ""
+        choices = sample.get("choices", "") or ""
+        if choices and not re.match(r'^[A-Z]+$', str(ans).strip()):
+            ans = find_choice_letter(str(ans).strip(), choices)
+
         ground_truth = ToMAnswers(
             q1_belief=str(ans),
-            q2_desire="", 
+            q2_desire="",
             q3_action=""
         )
 
         try:
-            # 4. 필드 매핑 (Hi-ToM 키 이름 기준)
-            # .get(key, "")를 사용하여 데이터가 없을 경우 None 대신 빈 문자열이 들어가게 함
+            # 4. 필드 매핑 (unified 키 이름 기준)
+            # choices가 있으면 질문에 포함 → LLM이 "K. green_drawer" 형식으로 답할 수 있도록
+            question = sample.get("question", "")
+            choices = sample.get("choices", "")
+            q1 = f"{question}\nChoices: {choices}" if choices else question
+
             ai_user.submit(
-                scenario=sample.get("story", ""),    # Hi-ToM 본문
-                q1=sample.get("question", ""),       # Hi-ToM 질문
-                q2="",                               # Hi-ToM에는 Q2, Q3가 없음
+                scenario=sample.get("story", ""),    # story 본문
+                q1=q1,                               # 질문 + 선택지
+                q2="",                               # 단일 질문 데이터셋에는 Q2, Q3 없음
                 q3="",
                 dataset_id=sample_id,
                 ground_truth=ground_truth
@@ -190,7 +229,10 @@ def run_batch(config: dict, dataset_path: str):
 
     # 5. 전체 평가 실행
     evaluator = Evaluator(output_dir=config["evaluation"]["output_dir"])
-    evaluator.evaluate_from_jsonl()
+    evaluator.evaluate_from_jsonl(
+        results_file=results_file,
+        output_file=f"evaluation_{dataset_name}.json"
+    )
 
 def run_ablation(config: dict, dataset_path: str):
     """Ablation study 실행"""
@@ -212,7 +254,8 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["single", "batch", "ablation", "eval"],
                         default="single", help="실행 모드")
     parser.add_argument("--config", default="config/config.yaml", help="설정 파일 경로")
-    parser.add_argument("--dataset", default="data/hitom/Hi-ToM_data.json", help="데이터셋 경로") # 나중에 경로 수정
+    parser.add_argument("--dataset", default="data/hitom/Hi-ToM_data.json", help="데이터셋 경로")
+    parser.add_argument("--limit", type=int, default=None, help="batch 모드에서 처리할 최대 샘플 수")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -220,7 +263,7 @@ if __name__ == "__main__":
     if args.mode == "single":
         run_single(config)
     elif args.mode == "batch":
-        run_batch(config, args.dataset)
+        run_batch(config, args.dataset, limit=args.limit)
     elif args.mode == "ablation":
         run_ablation(config, args.dataset)
     elif args.mode == "eval":

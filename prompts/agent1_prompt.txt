@@ -14,7 +14,7 @@ R4. FALSE     — Target intends to induce a wrong belief in another to advance 
 R5. MISTAKEN  — Target speaks sincerely but is factually wrong → verdict=TRUE, subtype="mistaken belief".
 R6. Actions   — Hiding, swapping, luring, disguising, etc. that mislead → verdict=FALSE, subtype="deceptive action".
 R7. Unknown   — Insufficient evidence → verdict=UNKNOWN; do not over-infer.
-R8. Answer    — If choices given, output EXACTLY one choice label; else shortest correct string.
+R8. Answer    — If choices given, output ONLY the single choice letter (e.g., "K"). Never include the answer text, a period, or any other characters.
 R9. Format    — Output ONE valid JSON object. No markdown or prose.
 R10. Chain    — Simulate innermost agent first, outward. Parse "A thinks B thinks C believes P"
                → simulate C→B→A. Each step uses only that agent's epistemic access.
@@ -54,7 +54,7 @@ OUTPUT SCHEMA
       }
     ],
     "chain_consistency_errors": [],
-    "response": "string",
+    "response": "<single letter only, e.g. \"K\">  — MUST be ONLY the choice label letter. No period, no text.",
     "rationale": "string"
   }
 }

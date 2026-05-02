@@ -69,7 +69,8 @@ class AIUser:
 
     def _save_result(self, state: ToMState) -> None:
         """실험 결과를 jsonl에 append (논문 실험 재현용)"""
-        log_path = self.output_dir / "results.jsonl"
+        results_file = self.config.get("evaluation", {}).get("results_file", "results.jsonl")
+        log_path = self.output_dir / results_file
         record = {
             "timestamp": datetime.now().isoformat(),
             "dataset_id": state.dataset_id,

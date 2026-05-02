@@ -20,6 +20,7 @@ R2. Each belief order uses ONLY what the reasoner at that level saw/heard/inferr
 R3. Label every path explicitly (e.g., Focal→X→Y).
 R4. Use "unknown" when evidence is insufficient. Do not fabricate.
 R5. Format — Output ONE valid JSON object. No markdown or prose.
+R5b. Answer format — "response" MUST be ONLY the single choice letter (e.g., "K"). No period, no answer text, no other characters.
 R6. Chain  — Simulate innermost agent first, outward. Each step's output feeds the next.
              Parse "A thinks B thinks C believes P" → simulate C→B→A.
 R7. Projection ban — Do NOT project focal's info gap onto modeled agents.
@@ -78,7 +79,7 @@ OUTPUT SCHEMA
       }
     ],
     "chain_consistency_errors": [],
-    "response": "string",
+    "response": "<single letter only, e.g. \"K\">  — MUST be ONLY the choice label letter. No period, no text.",
     "rationale": "string"
   }
 }

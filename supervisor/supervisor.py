@@ -20,6 +20,14 @@ from supervisor.debate import DebateManager
 logger = logging.getLogger(__name__)
 
 
+def _extract_choice_letter(text: str) -> str:
+    """'K. green_drawer' → 'K',  'K' → 'K',  텍스트만 있으면 그대로"""
+    if not text:
+        return ""
+    m = re.match(r'^([A-Z])(?:\.|\s|$)', text.strip())
+    return m.group(1) if m else text.strip()
+
+
 class Supervisor:
     def __init__(self, pool: MessagePool, config: dict):
         self.pool = pool
@@ -101,7 +109,7 @@ class Supervisor:
 
         # Step 3: 토론 여부 결정
         if supervisor_result.get("agreement") or not self.use_debate:
-            final = self._extract_final_answer(supervisor_result)
+            final = self._extract_final_answer(supervisor_result, state=state)
             self.pool.set_final_answer(final)
             logger.info("[Supervisor] Agreement reached. No debate needed.")
         else:
@@ -139,6 +147,14 @@ class Supervisor:
 
     def _call_supervisor(self, state: ToMState, debate_round: int) -> dict:
         state_dict = asdict(state)
+
+        # 에이전트 tom_answer에서 선지 레이블만 추출하여 비교표 생성
+        answer_table = {}
+        for agent_key, output in (state_dict.get("agent_outputs") or {}).items():
+            if output:
+                raw_ans = output.get("tom_answers", {}).get("q1_belief", "")
+                answer_table[agent_key] = _extract_choice_letter(raw_ans)
+
         user_content = f"""
 Current context file:
 {json.dumps(state_dict, ensure_ascii=False, indent=2)}
@@ -146,9 +162,12 @@ Current context file:
 Current debate_round: {debate_round}
 Max rounds allowed: {self.max_rounds}
 
+Normalized answer labels (letter only, for agreement check):
+{json.dumps(answer_table, ensure_ascii=False)}
+
 Your task:
-- Compare agent answers for q1_belief (= tom_answer), q2_desire, q3_action
-- If all three agents agree on ALL questions → agreement: true
+- Compare the normalized labels above for agreement
+- If all present agents share the same label → agreement: true
 - Otherwise → agreement: false, trigger debate
 
 Respond ONLY in valid JSON format.
@@ -193,10 +212,20 @@ Analyze why the agents disagree and provide correction guidance.
         logger.info(f"[Supervisor] Correction generated: {correction[:100]}...")
         return correction
 
-    def _extract_final_answer(self, supervisor_result: dict) -> ToMAnswers:
-        fa = supervisor_result.get("final_answer", {})
-        return ToMAnswers(
-            q1_belief=fa.get("q1_belief"),
-            q2_desire=fa.get("q2_desire"),
-            q3_action=fa.get("q3_action")
-        )
+    def _extract_final_answer(self, supervisor_result: dict, state: ToMState = None) -> ToMAnswers:
+        fa = supervisor_result.get("final_answer") or {}
+        q1 = fa.get("q1_belief") or None
+        q2 = fa.get("q2_desire") or None
+        q3 = fa.get("q3_action") or None
+
+        # LLM이 final_answer를 비워두거나 null로 반환한 경우, 에이전트 출력에서 직접 추출
+        if not q1 and state is not None:
+            for output in (asdict(state).get("agent_outputs") or {}).values():
+                if output and output.get("tom_answers", {}).get("q1_belief"):
+                    answers = output["tom_answers"]
+                    q1 = q1 or _extract_choice_letter(answers.get("q1_belief", "")) or None
+                    q2 = q2 or _extract_choice_letter(answers.get("q2_desire", "")) or None
+                    q3 = q3 or answers.get("q3_action", "") or None
+                    break
+
+        return ToMAnswers(q1_belief=q1, q2_desire=q2, q3_action=q3)

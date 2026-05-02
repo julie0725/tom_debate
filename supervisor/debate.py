@@ -3,6 +3,7 @@ debate.py
 """
 import asyncio
 import logging
+import re
 from collections import Counter
 from dataclasses import asdict
 
@@ -10,6 +11,14 @@ from core.context_file import ToMState, ToMAnswers
 from core.message_pool import MessagePool
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_choice_letter(text: str) -> str:
+    """'K. green_drawer' → 'K',  'K' → 'K',  텍스트만 있으면 그대로"""
+    if not text:
+        return ""
+    m = re.match(r'^([A-Z])(?:\.|\s|$)', text.strip())
+    return m.group(1) if m else text.strip()
 
 
 class DebateManager:
@@ -53,7 +62,7 @@ class DebateManager:
 
             if result.get("agreement"):
                 logger.info(f"[Debate] Consensus reached at round {round_num}")
-                return self._extract_answer(result)
+                return self._extract_answer(result, state)
 
         # max_rounds 초과
         logger.info("[Debate] Max rounds reached. Supervisor analyzing errors...")
@@ -81,7 +90,7 @@ class DebateManager:
 
             if final_result.get("agreement"):
                 logger.info("[Debate] Consensus reached after correction.")
-                return self._extract_answer(final_result)
+                return self._extract_answer(final_result, state)
 
         logger.info("[Debate] Applying majority vote.")
         state = pool.get_state()
@@ -137,7 +146,7 @@ class DebateManager:
 
         def vote_for_question(q_key: str) -> str:
             answers = [
-                out["tom_answers"].get(q_key, "")
+                _extract_choice_letter(out["tom_answers"].get(q_key, ""))
                 for out in outputs
                 if out and out.get("tom_answers")
             ]
@@ -160,10 +169,20 @@ class DebateManager:
         logger.info(f"[Debate] Majority vote result: {result}")
         return result
 
-    def _extract_answer(self, supervisor_result: dict) -> ToMAnswers:
-        fa = supervisor_result.get("final_answer", {})
-        return ToMAnswers(
-            q1_belief=fa.get("q1_belief"),
-            q2_desire=fa.get("q2_desire"),
-            q3_action=fa.get("q3_action")
-        )
+    def _extract_answer(self, supervisor_result: dict, state: ToMState = None) -> ToMAnswers:
+        fa = supervisor_result.get("final_answer") or {}
+        q1 = fa.get("q1_belief") or None
+        q2 = fa.get("q2_desire") or None
+        q3 = fa.get("q3_action") or None
+
+        # supervisor가 final_answer를 비워 둔 경우 에이전트 출력에서 직접 추출
+        if not q1 and state is not None:
+            for output in (asdict(state).get("agent_outputs") or {}).values():
+                if output and output.get("tom_answers", {}).get("q1_belief"):
+                    answers = output["tom_answers"]
+                    q1 = q1 or _extract_choice_letter(answers.get("q1_belief", "")) or None
+                    q2 = q2 or _extract_choice_letter(answers.get("q2_desire", "")) or None
+                    q3 = q3 or answers.get("q3_action", "") or None
+                    break
+
+        return ToMAnswers(q1_belief=q1, q2_desire=q2, q3_action=q3)

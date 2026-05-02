@@ -34,12 +34,17 @@ class Evaluator:
             "all_correct": q1_correct and q2_correct and q3_correct
         }
 
-    def evaluate_from_jsonl(self, jsonl_path: str = None) -> dict:
+    def evaluate_from_jsonl(self, jsonl_path: str = None, results_file: str = None, output_file: str = "evaluation_summary.json") -> dict:
         """
         results.jsonl 전체 평가
         논문 Table 기준 집계
         """
-        path = Path(jsonl_path) if jsonl_path else self.output_dir / "results.jsonl"
+        if jsonl_path:
+            path = Path(jsonl_path)
+        elif results_file:
+            path = self.output_dir / results_file
+        else:
+            path = self.output_dir / "results.jsonl"
         if not path.exists():
             logger.warning(f"No results file at {path}")
             return {}
@@ -88,7 +93,7 @@ class Evaluator:
         }
 
         # 결과 저장
-        out_path = self.output_dir / "evaluation_summary.json"
+        out_path = self.output_dir / output_file
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
 
