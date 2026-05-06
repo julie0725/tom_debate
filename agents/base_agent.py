@@ -40,8 +40,31 @@ class BaseAgent(ABC):
         return ""
 
     @abstractmethod
-    def reason(self, state_dict: dict, debate_context: dict = None) -> dict:
+    def reason(self, state_dict: dict) -> dict:
         pass
+
+    def _build_tom_answers(self, parsed: dict, state_dict: dict) -> list:
+        """Return tom_answers as [{"id": "q1", "value": "..."}, ...].
+
+        Prefers the new root-level tom_answers list from the LLM; falls back to
+        constructing it from answer.response for backward compatibility.
+        """
+        raw = parsed.get("tom_answers")
+        if isinstance(raw, list) and raw:
+            return raw
+        answer_block = parsed.get("answer", {})
+        primary = answer_block.get("response", "")
+        questions = state_dict.get("questions", [])
+        answers = []
+        for q in questions:
+            qid = q.get("id", "")
+            if qid == "q1":
+                answers.append({"id": "q1", "value": primary})
+            elif qid == "q2":
+                answers.append({"id": "q2", "value": answer_block.get("q2_desire", "")})
+            elif qid == "q3":
+                answers.append({"id": "q3", "value": answer_block.get("q3_action", "")})
+        return answers or ([{"id": "q1", "value": primary}] if primary else [])
 
     def _call_llm(self, user_content: str) -> str:
         """LLM 호출 (provider 무관하게 동일 인터페이스)"""

@@ -17,16 +17,14 @@ class Agent2Character(BaseAgent):
     def __init__(self, model: str = "gpt-3.5-turbo", max_tokens: int = 2000, provider: str = "openai", base_url: str = None):
         super().__init__(agent_id=2, model=model, max_tokens=max_tokens, provider=provider, base_url=base_url)
 
-    # 교체
-    def reason(self, state_dict: dict, debate_context: dict = None) -> dict:
+    def reason(self, state_dict: dict) -> dict:
         user_prompt = self._build_user_prompt(state_dict)
         raw = self._call_llm(user_prompt)
         parsed = self._parse_json_response(raw)
 
         answer_block = parsed.get("answer", {})
-        tom_answer = answer_block.get("response", "")
+        tom_answers = self._build_tom_answers(parsed, state_dict)
 
-        # update_log: {event_idx: {character: {belief_state: ...}}} 형식
         raw_log = parsed.get("belief_update_log", parsed.get("update_log", []))
         update_log = {}
         if isinstance(raw_log, list):
@@ -50,11 +48,7 @@ class Agent2Character(BaseAgent):
             "truth_judgment": None,
             "update_log": update_log,
             "belief_state": parsed.get("final_belief_state", []),
-            "tom_answer": tom_answer,
+            "tom_answer": answer_block.get("response", ""),
             "reasoning": answer_block.get("rationale", ""),
-            "tom_answers": {
-                "q1_belief": tom_answer,
-                "q2_desire": answer_block.get("q2_desire", ""),
-                "q3_action": answer_block.get("q3_action", ""),
-            }
+            "tom_answers": tom_answers,
         }

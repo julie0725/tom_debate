@@ -11,7 +11,7 @@ import json
 import logging
 from pathlib import Path
 
-from core.message_pool import reset_message_pool
+from core.tom_task import ToMTask
 from user.ai_user import AIUser
 from evaluation.evaluator import Evaluator
 
@@ -108,22 +108,23 @@ class AblationRunner:
             evaluator = Evaluator(output_dir=str(condition_output_dir) + "/")
 
             for sample in self.dataset:
-                reset_message_pool()
-                from core.context_file import ToMAnswers
-                gt = sample.get("ground_truth")
-                ground_truth = ToMAnswers(**gt) if gt else None
-
+                gt = sample.get("ground_truth") or {}
+                task = ToMTask(
+                    context=sample.get("scenario", ""),
+                    question=sample.get("q1", ""),
+                    gold_answer=gt.get("q1_belief") or None,
+                    dataset_id=str(sample.get("id", "")),
+                    metadata={
+                        "q2": sample.get("q2", ""),
+                        "q3": sample.get("q3", ""),
+                        "gold_q2": gt.get("q2_desire"),
+                        "gold_q3": gt.get("q3_action"),
+                    },
+                )
                 try:
-                    ai_user.submit(
-                        scenario=sample["scenario"],
-                        q1=sample["q1"],
-                        q2=sample["q2"],
-                        q3=sample["q3"],
-                        dataset_id=sample.get("id"),
-                        ground_truth=ground_truth
-                    )
+                    ai_user.submit(task)
                 except Exception as e:
-                    logger.error(f"[Ablation] Sample {sample.get('id')} failed: {e}")
+                    logger.error(f"[Ablation] Sample {task.dataset_id} failed: {e}")
 
             # 조건별 평가
             summary = evaluator.evaluate_from_jsonl()

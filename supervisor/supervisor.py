@@ -8,10 +8,10 @@ import re
 from pathlib import Path
 from dataclasses import asdict
 
-from core.context_file import ToMState, ToMAnswers
+from core.context_file import ToMState, ToMAnswers, get_answer_value
 from core.message_pool import MessagePool
 from core.llm_client import get_llm_client, call_llm
-from core.run_logger import RunLogger          # ← 추가
+from core.run_logger import RunLogger
 from agents.agent1_context import Agent1Context
 from agents.agent2_character import Agent2Character
 from agents.agent3_perspective import Agent3Perspective
@@ -21,11 +21,24 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_choice_letter(text: str) -> str:
-    """'K. green_drawer' → 'K',  'K' → 'K',  텍스트만 있으면 그대로"""
     if not text:
         return ""
     m = re.match(r'^([A-Z])(?:\.|\s|$)', text.strip())
     return m.group(1) if m else text.strip()
+
+
+def _parse_final_answer(fa) -> dict:
+    """Convert supervisor final_answer (list or legacy dict) to {q_id: value} map."""
+    if isinstance(fa, list):
+        return {a.get("id"): (a.get("value") or "") for a in fa if a.get("id")}
+    if isinstance(fa, dict):
+        result = {}
+        for k, v in fa.items():
+            if v:
+                qid = k.replace("_belief", "").replace("_desire", "").replace("_action", "")
+                result[qid] = v
+        return result
+    return {}
 
 
 class Supervisor:
@@ -66,7 +79,6 @@ class Supervisor:
         self.system_prompt = self._load_prompt()
         self.correction_prompt = self._load_correction_prompt()
 
-        # ↓ 추가
         self.run_logger: RunLogger = None
         self.output_dir = config.get("evaluation", {}).get("output_dir", "outputs/")
 
@@ -83,52 +95,44 @@ class Supervisor:
         if state is None:
             raise ValueError("No context file in message pool.")
 
-        # ↓ RunLogger 초기화 (추가)
         self.run_logger = RunLogger(output_dir=self.output_dir, dataset_id=state.dataset_id)
 
         logger.info("[Supervisor] Starting pipeline")
         self.pool.update_status("pending")
-
-        # ↓ 초기 Context File 로그 (추가)
         self.run_logger.log_context_file(asdict(state), label="initial")
 
-        # Step 1: Agent 병렬 추론
-        agent_outputs = await self._run_agents_parallel(state)
-        for agent_id, output in agent_outputs.items():
-            self.pool.update_agent_output(agent_id, output)
+        try:
+            agent_outputs = await self._run_agents_parallel(state)
+            for agent_id, output in agent_outputs.items():
+                self.pool.update_agent_output(agent_id, output)
 
-        state = self.pool.get_state()
-
-        # ↓ 초기 추론 결과 로그 (추가)
-        self.run_logger.log_agent_outputs(state.agent_outputs, label="initial")
-        self.run_logger.log_context_file(asdict(state), label="after_initial_reasoning")
-
-        # Step 2: 감독관 판단
-        supervisor_result = self._call_supervisor(state, debate_round=0)
-        logger.info(f"[Supervisor] Initial check: agreement={supervisor_result.get('agreement')}")
-
-        # Step 3: 토론 여부 결정
-        if supervisor_result.get("agreement") or not self.use_debate:
-            final = self._extract_final_answer(supervisor_result, state=state)
-            self.pool.set_final_answer(final)
-            logger.info("[Supervisor] Agreement reached. No debate needed.")
-        else:
             state = self.pool.get_state()
-            state.debate_triggered = True
-            self.pool.update_status("debating")
-            logger.info("[Supervisor] Disagreement detected. Starting debate.")
-            final = await self.debate_manager.run_debate(
-                pool=self.pool,
-                supervisor_call_fn=self._call_supervisor,
-                supervisor_correction_fn=self._call_supervisor_correction,
-                run_logger=self.run_logger    # ← 추가
-            )
-            self.pool.set_final_answer(final)
+            self.run_logger.log_agent_outputs(state.agent_outputs, label="initial")
+            self.run_logger.log_context_file(asdict(state), label="after_initial_reasoning")
 
-        # ↓ 최종 로그 (추가)
-        final_state = self.pool.get_state()
-        self.run_logger.log_context_file(asdict(final_state), label="final")
-        self.run_logger.log_final_summary(asdict(final_state))
+            supervisor_result = self._call_supervisor(state, debate_round=0)
+            logger.info(f"[Supervisor] Initial check: agreement={supervisor_result.get('agreement')}")
+
+            if supervisor_result.get("agreement") or not self.use_debate:
+                final = self._extract_final_answer(supervisor_result, state=state)
+                self.pool.set_final_answer(final)
+                logger.info("[Supervisor] Agreement reached. No debate needed.")
+            else:
+                state = self.pool.get_state()
+                state.debate_triggered = True
+                self.pool.update_status("debating")
+                logger.info("[Supervisor] Disagreement detected. Starting debate.")
+                final = await self.debate_manager.run_debate(
+                    pool=self.pool,
+                    supervisor_call_fn=self._call_supervisor,
+                    supervisor_correction_fn=self._call_supervisor_correction,
+                    run_logger=self.run_logger
+                )
+                self.pool.set_final_answer(final)
+        finally:
+            final_state = self.pool.get_state()
+            self.run_logger.log_context_file(asdict(final_state), label="final")
+            self.run_logger.log_final_summary(asdict(final_state))
 
         return final_state
 
@@ -137,7 +141,7 @@ class Supervisor:
 
         async def run_agent(agent_id, agent):
             loop = asyncio.get_event_loop()
-            output = await loop.run_in_executor(None, agent.reason, state_dict, None)
+            output = await loop.run_in_executor(None, agent.reason, state_dict)
             logger.info(f"[Supervisor] Agent{agent_id} reasoning complete")
             return agent_id, output
 
@@ -148,12 +152,20 @@ class Supervisor:
     def _call_supervisor(self, state: ToMState, debate_round: int) -> dict:
         state_dict = asdict(state)
 
-        # 에이전트 tom_answer에서 선지 레이블만 추출하여 비교표 생성
+        # Build per-agent answer table: {agent_key: {q_id: letter}}
         answer_table = {}
         for agent_key, output in (state_dict.get("agent_outputs") or {}).items():
             if output:
-                raw_ans = output.get("tom_answers", {}).get("q1_belief", "")
-                answer_table[agent_key] = _extract_choice_letter(raw_ans)
+                tom_ans = output.get("tom_answers", [])
+                if isinstance(tom_ans, list):
+                    answer_table[agent_key] = {
+                        a.get("id"): _extract_choice_letter(a.get("value", ""))
+                        for a in tom_ans if a.get("id")
+                    }
+                elif isinstance(tom_ans, dict):
+                    answer_table[agent_key] = {
+                        "q1": _extract_choice_letter(tom_ans.get("q1_belief", ""))
+                    }
 
         user_content = f"""
 Current context file:
@@ -166,8 +178,8 @@ Normalized answer labels (letter only, for agreement check):
 {json.dumps(answer_table, ensure_ascii=False)}
 
 Your task:
-- Compare the normalized labels above for agreement
-- If all present agents share the same label → agreement: true
+- Compare the normalized labels above for agreement on each question id
+- If all present agents share the same label for every question → agreement: true
 - Otherwise → agreement: false, trigger debate
 
 Respond ONLY in valid JSON format.
@@ -195,7 +207,7 @@ Scenario:
 {state_dict.get('scenario', '')}
 
 Questions:
-{json.dumps(state_dict.get('questions', {}), ensure_ascii=False, indent=2)}
+{json.dumps(state_dict.get('questions', []), ensure_ascii=False, indent=2)}
 
 Agent outputs:
 {json.dumps(state_dict.get('agent_outputs', {}), ensure_ascii=False, indent=2)}
@@ -213,19 +225,20 @@ Analyze why the agents disagree and provide correction guidance.
         return correction
 
     def _extract_final_answer(self, supervisor_result: dict, state: ToMState = None) -> ToMAnswers:
-        fa = supervisor_result.get("final_answer") or {}
-        q1 = fa.get("q1_belief") or None
-        q2 = fa.get("q2_desire") or None
-        q3 = fa.get("q3_action") or None
+        ans_map = _parse_final_answer(supervisor_result.get("final_answer"))
 
-        # LLM이 final_answer를 비워두거나 null로 반환한 경우, 에이전트 출력에서 직접 추출
-        if not q1 and state is not None:
+        if not ans_map.get("q1") and state is not None:
             for output in (asdict(state).get("agent_outputs") or {}).values():
-                if output and output.get("tom_answers", {}).get("q1_belief"):
-                    answers = output["tom_answers"]
-                    q1 = q1 or _extract_choice_letter(answers.get("q1_belief", "")) or None
-                    q2 = q2 or _extract_choice_letter(answers.get("q2_desire", "")) or None
-                    q3 = q3 or answers.get("q3_action", "") or None
+                if not output:
+                    continue
+                tom_ans = output.get("tom_answers")
+                q1_val = _extract_choice_letter(get_answer_value(tom_ans, "q1"))
+                if q1_val:
+                    if isinstance(tom_ans, list):
+                        for a in tom_ans:
+                            qid = a.get("id")
+                            if qid and not ans_map.get(qid):
+                                ans_map[qid] = _extract_choice_letter(a.get("value", ""))
                     break
 
-        return ToMAnswers(q1_belief=q1, q2_desire=q2, q3_action=q3)
+        return ToMAnswers(answers=[{"id": k, "value": v} for k, v in ans_map.items() if v])

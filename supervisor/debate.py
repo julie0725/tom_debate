@@ -7,18 +7,31 @@ import re
 from collections import Counter
 from dataclasses import asdict
 
-from core.context_file import ToMState, ToMAnswers
+from core.context_file import ToMState, ToMAnswers, get_answer_value
 from core.message_pool import MessagePool
 
 logger = logging.getLogger(__name__)
 
 
 def _extract_choice_letter(text: str) -> str:
-    """'K. green_drawer' → 'K',  'K' → 'K',  텍스트만 있으면 그대로"""
     if not text:
         return ""
     m = re.match(r'^([A-Z])(?:\.|\s|$)', text.strip())
     return m.group(1) if m else text.strip()
+
+
+def _parse_final_answer(fa) -> dict:
+    """Convert supervisor final_answer (list or legacy dict) to {q_id: value} map."""
+    if isinstance(fa, list):
+        return {a.get("id"): (a.get("value") or "") for a in fa if a.get("id")}
+    if isinstance(fa, dict):
+        result = {}
+        for k, v in fa.items():
+            if v:
+                qid = k.replace("_belief", "").replace("_desire", "").replace("_action", "")
+                result[qid] = v
+        return result
+    return {}
 
 
 class DebateManager:
@@ -32,7 +45,7 @@ class DebateManager:
         pool: MessagePool,
         supervisor_call_fn,
         supervisor_correction_fn=None,
-        run_logger=None    # ← 추가된 파라미터
+        run_logger=None
     ) -> ToMAnswers:
 
         for round_num in range(1, self.max_rounds + 1):
@@ -40,7 +53,7 @@ class DebateManager:
             pool.update_debate_round(round_num)
 
             state = pool.get_state()
-            outputs_before = dict(state.agent_outputs)  # ← 재추론 전 저장
+            outputs_before = dict(state.agent_outputs)
 
             await self._re_reason_all(pool)
 
@@ -48,7 +61,6 @@ class DebateManager:
             result = supervisor_call_fn(state, debate_round=round_num)
             logger.info(f"[Debate] Round {round_num} agreement={result.get('agreement')}")
 
-            # ↓ 라운드 로그 (추가)
             if run_logger:
                 run_logger.log_debate_round(
                     round_num=round_num,
@@ -64,7 +76,6 @@ class DebateManager:
                 logger.info(f"[Debate] Consensus reached at round {round_num}")
                 return self._extract_answer(result, state)
 
-        # max_rounds 초과
         logger.info("[Debate] Max rounds reached. Supervisor analyzing errors...")
 
         if supervisor_correction_fn:
@@ -73,7 +84,7 @@ class DebateManager:
             pool.update_supervisor_correction(correction)
 
             if run_logger:
-                run_logger.log_supervisor_correction(correction)  # ← 추가
+                run_logger.log_supervisor_correction(correction)
 
             pool.update_debate_context({})
             logger.info("[Debate] Re-reasoning from scratch...")
@@ -83,7 +94,6 @@ class DebateManager:
             state = pool.get_state()
             final_result = supervisor_call_fn(state, debate_round=self.max_rounds + 1)
 
-            # ↓ fresh reInfer 로그 (추가)
             if run_logger:
                 run_logger.log_agent_outputs(state.agent_outputs, label="fresh_reInfer")
                 run_logger.log_context_file(asdict(state), label="after_correction_reInfer")
@@ -115,7 +125,7 @@ class DebateManager:
 
         async def re_reason_agent(agent_id, agent):
             loop = asyncio.get_event_loop()
-            output = await loop.run_in_executor(None, agent.reason, state_dict, None)
+            output = await loop.run_in_executor(None, agent.reason, state_dict)
             return agent_id, output
 
         tasks = [re_reason_agent(aid, agent) for aid, agent in self.agents.items()]
@@ -129,7 +139,7 @@ class DebateManager:
 
         async def re_reason_agent(agent_id, agent):
             loop = asyncio.get_event_loop()
-            output = await loop.run_in_executor(None, agent.reason, state_dict, None)
+            output = await loop.run_in_executor(None, agent.reason, state_dict)
             return agent_id, output
 
         tasks = [re_reason_agent(aid, agent) for aid, agent in self.agents.items()]
@@ -144,45 +154,55 @@ class DebateManager:
             if state.agent_outputs.get(f"agent{i}") is not None
         ]
 
-        def vote_for_question(q_key: str) -> str:
-            answers = [
-                _extract_choice_letter(out["tom_answers"].get(q_key, ""))
+        # Collect question IDs present in agent outputs
+        q_ids: list[str] = []
+        for out in outputs:
+            if out:
+                for a in (out.get("tom_answers") or []):
+                    qid = a.get("id")
+                    if qid and qid not in q_ids:
+                        q_ids.append(qid)
+        if not q_ids:
+            q_ids = ["q1"]
+
+        def vote_for_question(q_id: str) -> str:
+            votes = [
+                _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
                 for out in outputs
-                if out and out.get("tom_answers")
+                if out and out.get("tom_answers") is not None
             ]
-            if not answers:
+            if not votes:
                 return ""
-            counter = Counter(answers)
+            counter = Counter(votes)
             top = counter.most_common()
             if len(top) == 1 or top[0][1] > top[1][1]:
                 return top[0][0]
-            tiebreak_out = state.agent_outputs.get(f"agent{self.tiebreak_agent}")
-            if tiebreak_out and tiebreak_out.get("tom_answers"):
-                return tiebreak_out["tom_answers"].get(q_key, top[0][0])
+            tiebreak = state.agent_outputs.get(f"agent{self.tiebreak_agent}")
+            if tiebreak:
+                tb_val = get_answer_value(tiebreak.get("tom_answers"), q_id)
+                return _extract_choice_letter(tb_val) or top[0][0]
             return top[0][0]
 
-        result = ToMAnswers(
-            q1_belief=vote_for_question("q1_belief"),
-            q2_desire=vote_for_question("q2_desire"),
-            q3_action=vote_for_question("q3_action")
-        )
+        result = ToMAnswers(answers=[{"id": qid, "value": vote_for_question(qid)} for qid in q_ids])
         logger.info(f"[Debate] Majority vote result: {result}")
         return result
 
     def _extract_answer(self, supervisor_result: dict, state: ToMState = None) -> ToMAnswers:
-        fa = supervisor_result.get("final_answer") or {}
-        q1 = fa.get("q1_belief") or None
-        q2 = fa.get("q2_desire") or None
-        q3 = fa.get("q3_action") or None
+        ans_map = _parse_final_answer(supervisor_result.get("final_answer"))
 
-        # supervisor가 final_answer를 비워 둔 경우 에이전트 출력에서 직접 추출
-        if not q1 and state is not None:
+        if not ans_map.get("q1") and state is not None:
             for output in (asdict(state).get("agent_outputs") or {}).values():
-                if output and output.get("tom_answers", {}).get("q1_belief"):
-                    answers = output["tom_answers"]
-                    q1 = q1 or _extract_choice_letter(answers.get("q1_belief", "")) or None
-                    q2 = q2 or _extract_choice_letter(answers.get("q2_desire", "")) or None
-                    q3 = q3 or answers.get("q3_action", "") or None
+                if not output:
+                    continue
+                tom_ans = output.get("tom_answers")
+                q1_val = _extract_choice_letter(get_answer_value(tom_ans, "q1"))
+                if q1_val:
+                    # Collect all question answers from this agent as fallback
+                    if isinstance(tom_ans, list):
+                        for a in tom_ans:
+                            qid = a.get("id")
+                            if qid and not ans_map.get(qid):
+                                ans_map[qid] = _extract_choice_letter(a.get("value", ""))
                     break
 
-        return ToMAnswers(q1_belief=q1, q2_desire=q2, q3_action=q3)
+        return ToMAnswers(answers=[{"id": k, "value": v} for k, v in ans_map.items() if v])
