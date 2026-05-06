@@ -14,6 +14,8 @@ from pathlib import Path
 from datetime import datetime
 from dataclasses import asdict
 
+from core.context_file import get_answer_value
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +33,9 @@ class RunLogger:
         safe_id = str(self.dataset_id).replace("/", "_").replace(":", "_")
         self.log_dir = Path(output_dir) / "logs" / safe_id
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        for f in self.log_dir.glob("*"):
+            if f.is_file():
+                f.unlink()
         self.start_time = datetime.now().isoformat()
         self._round_logs = []
 
@@ -82,13 +87,14 @@ class RunLogger:
             agent_id = output.get("agent_id", agent_key)
 
             # 에이전트 타입별 핵심 필드 추출
+            tom_ans_raw = output.get("tom_answers", [])
             if agent_id == 1:  # Semantic Agent
                 formatted[agent_key] = {
                     "_role": "Semantic Agent (진실/거짓 판단)",
                     "character_goal": output.get("character_goal", ""),
                     "truth_judgment": output.get("truth_judgment", {}),
-                    "tom_answer": output.get("tom_answers", {}).get("q1_belief", ""),
-                    "tom_answers_full": output.get("tom_answers", {}),
+                    "tom_answer": get_answer_value(tom_ans_raw, "q1"),
+                    "tom_answers_full": tom_ans_raw,
                 }
             elif agent_id == 2:  # Ego Agent
                 formatted[agent_key] = {
@@ -96,16 +102,16 @@ class RunLogger:
                     "character_goal": output.get("character_goal", ""),
                     "update_log": output.get("update_log", []),
                     "belief_state": output.get("belief_state", ""),
-                    "tom_answer": output.get("tom_answers", {}).get("q1_belief", ""),
-                    "tom_answers_full": output.get("tom_answers", {}),
+                    "tom_answer": get_answer_value(tom_ans_raw, "q1"),
+                    "tom_answers_full": tom_ans_raw,
                 }
             elif agent_id == 3:  # Observer Agent
                 formatted[agent_key] = {
                     "_role": "Observer Agent (고차원 추론)",
                     "update_log": output.get("update_log", []),
                     "belief_state": output.get("belief_state", []),
-                    "tom_answer": output.get("tom_answers", {}).get("q1_belief", ""),
-                    "tom_answers_full": output.get("tom_answers", {}),
+                    "tom_answer": get_answer_value(tom_ans_raw, "q1"),
+                    "tom_answers_full": tom_ans_raw,
                 }
             else:
                 formatted[agent_key] = output
@@ -132,10 +138,12 @@ class RunLogger:
             print(f"    → tom_answer: {tom_ans}")
             if "tom_answers_full" in out:
                 full = out["tom_answers_full"]
-                if full.get("q2_desire"):
-                    print(f"    → q2_desire : {full.get('q2_desire')}")
-                if full.get("q3_action"):
-                    print(f"    → q3_action : {full.get('q3_action')}")
+                q2 = get_answer_value(full, "q2")
+                q3 = get_answer_value(full, "q3")
+                if q2:
+                    print(f"    → q2_desire : {q2}")
+                if q3:
+                    print(f"    → q3_action : {q3}")
         print(f"{'─'*60}\n")
 
     # ── 토론 라운드 로그 ──────────────────────────────────────
@@ -192,9 +200,9 @@ class RunLogger:
             for other_key, other_out in other_outputs.items():
                 if other_out:
                     sees[other_key] = {
-                        "tom_answer": other_out.get("tom_answers", {}).get("q1_belief", "?"),
+                        "tom_answer": get_answer_value(other_out.get("tom_answers", []), "q1") or "?",
                         "reasoning_summary": str(other_out.get("reasoning", ""))[:200],
-                        "full_output": other_out,  # 전체 JSON도 포함
+                        "full_output": other_out,
                     }
             formatted[f"{agent_key}_sees"] = sees
 
@@ -205,7 +213,7 @@ class RunLogger:
         result = {}
         for key, out in agent_outputs.items():
             if out:
-                result[key] = out.get("tom_answers", {})
+                result[key] = out.get("tom_answers", [])
         return result
 
     def _print_debate_round(self, round_log: dict):
@@ -226,7 +234,10 @@ class RunLogger:
         print("\n  [재추론 후 답변]")
         after = round_log.get("agent_outputs_after_reInfer", {})
         for key, ans in after.items():
-            print(f"    {key}: q1={ans.get('q1_belief','?')} | q2={ans.get('q2_desire','?')} | q3={ans.get('q3_action','?')}")
+            q1 = get_answer_value(ans, "q1") or "?"
+            q2 = get_answer_value(ans, "q2") or "?"
+            q3 = get_answer_value(ans, "q3") or "?"
+            print(f"    {key}: q1={q1} | q2={q2} | q3={q3}")
 
         sup = round_log.get("supervisor_result", {})
         agree = sup.get("agreement", "?")
@@ -279,7 +290,11 @@ class RunLogger:
         print(f"  PIPELINE COMPLETE | dataset_id={self.dataset_id}")
         print(f"  status={summary['status']} | debate_rounds={summary['debate_rounds']}")
         fa = summary["final_answer"]
-        print(f"  final_answer: q1={fa.get('q1_belief')} | q2={fa.get('q2_desire')} | q3={fa.get('q3_action')}")
+        fa_answers = fa.get("answers", []) if isinstance(fa, dict) else []
+        q1 = get_answer_value(fa_answers, "q1")
+        q2 = get_answer_value(fa_answers, "q2")
+        q3 = get_answer_value(fa_answers, "q3")
+        print(f"  final_answer: q1={q1} | q2={q2} | q3={q3}")
         print(f"  logs saved to: {self.log_dir}")
         print(f"{'='*60}\n")
 

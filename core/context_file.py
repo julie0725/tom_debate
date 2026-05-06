@@ -10,42 +10,62 @@ from typing import Optional
 import json
 
 
+def get_answer_value(tom_answers, question_id: str) -> str:
+    """Extract a single question's value from tom_answers in either format.
+
+    Accepts list format [{"id": "q1", "value": "A"}, ...]
+    or legacy dict format {"q1_belief": "A", "q2_desire": "", "q3_action": ""}.
+    """
+    if isinstance(tom_answers, list):
+        for a in tom_answers:
+            if a.get("id") == question_id:
+                return a.get("value", "")
+    elif isinstance(tom_answers, dict):
+        _legacy = {"q1": "q1_belief", "q2": "q2_desire", "q3": "q3_action"}
+        return tom_answers.get(_legacy.get(question_id, question_id), "")
+    return ""
+
+
 @dataclass
 class ToMAnswers:
-    """Big-ToM 3가지 질문에 대한 답변"""
-    q1_belief: Optional[str] = None    # Belief 질문 (이지선다)
-    q2_desire: Optional[str] = None    # Desire 질문 (이지선다)
-    q3_action: Optional[str] = None    # Action 질문 (개방형)
+    """Dataset-independent answer container.
+
+    answers: list of {"id": "q1", "value": "A"} dicts, one per question asked.
+    """
+    answers: list = field(default_factory=list)
+
+    def get_value(self, question_id: str) -> Optional[str]:
+        for a in self.answers:
+            if a.get("id") == question_id:
+                return a.get("value") or None
+        return None
 
     def to_dict(self):
         return asdict(self)
 
     def is_complete(self) -> bool:
-        return all([self.q1_belief, self.q2_desire, self.q3_action])
+        return bool(self.answers) and all(a.get("value") for a in self.answers)
 
     def matches(self, other: "ToMAnswers") -> bool:
-        """두 답변이 일치하는지 확인 (q3 action은 핵심 키워드 기준)"""
-        q1_match = self.q1_belief == other.q1_belief
-        q2_match = self.q2_desire == other.q2_desire
-        # Action은 개방형이라 완전 일치보다 핵심 의미 비교 (일단 문자열 일치로 처리)
-        q3_match = self.q3_action == other.q3_action
-        return q1_match and q2_match and q3_match
+        for a in self.answers:
+            if a.get("value") != other.get_value(a.get("id")):
+                return False
+        return True
 
 
 @dataclass
 class AgentOutput:
-    """각 Agent의 출력값"""
+    """각 Agent의 출력값 (타입 힌트용; 런타임에는 raw dict로 저장됨)"""
     agent_id: int
     character_goal: Optional[str] = None
-    truth_judgment: Optional[bool] = None       # Agent 1 전용
-    update_log: list = field(default_factory=list)  # Agent 2, 3 전용
-    belief_state: Optional[str] = None          # Agent 2, 3 전용
-    tom_answers: ToMAnswers = field(default_factory=ToMAnswers)
-    reasoning: Optional[str] = None             # 추론 과정 (토론 시 공유됨)
+    truth_judgment: Optional[bool] = None
+    update_log: list = field(default_factory=list)
+    belief_state: Optional[str] = None
+    tom_answers: list = field(default_factory=list)   # [{"id": "q1", "value": "A"}, ...]
+    reasoning: Optional[str] = None
 
     def to_dict(self):
-        d = asdict(self)
-        return d
+        return asdict(self)
 
 
 @dataclass
@@ -56,11 +76,8 @@ class ToMState:
     """
     # 입력
     scenario: str = ""
-    questions: dict = field(default_factory=lambda: {
-        "q1": "",   # Belief 질문
-        "q2": "",   # Desire 질문
-        "q3": ""    # Action 질문
-    })
+    questions: list = field(default_factory=list)
+    # [{"id": "q1", "text": "..."}, {"id": "q2", "text": "..."}, ...]
 
     # 에이전트 출력
     agent_outputs: dict = field(default_factory=lambda: {
@@ -71,21 +88,17 @@ class ToMState:
 
     # 토론 상태
     debate_round: int = 0
-    status: str = "pending"             # pending | debating | done
+    status: str = "pending"
     debate_triggered: bool = False
     majority_vote_applied: bool = False
 
-    # 토론 컨텍스트 (MessagePool을 통해 공유 - 직접 에이전트간 전달 금지)
-    # 구조: {"round": int, "agent1": {"other_outputs": {...}}, "agent2": {...}, "agent3": {...}}
     debate_context: dict = field(default_factory=dict)
-
-    # 감독관 오류 분석 결과 (max_rounds 초과 시 작성)
     supervisor_correction: Optional[str] = None
 
     # 최종 답변
     final_answer: ToMAnswers = field(default_factory=ToMAnswers)
 
-    # 메타데이터 (논문 실험용)
+    # 메타데이터
     dataset_id: Optional[str] = None
     ground_truth: Optional[ToMAnswers] = None
 
@@ -93,7 +106,6 @@ class ToMState:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2)
 
     def to_markdown(self) -> str:
-        """디버깅용 MD 형식 출력"""
         lines = [
             "# ToM Context File",
             f"**Status**: {self.status}",
@@ -103,31 +115,22 @@ class ToMState:
             self.scenario,
             "",
             "## Questions",
-            f"- Q1 (Belief): {self.questions.get('q1', '')}",
-            f"- Q2 (Desire): {self.questions.get('q2', '')}",
-            f"- Q3 (Action): {self.questions.get('q3', '')}",
-            "",
-            "## Agent Outputs",
         ]
+        for q in self.questions:
+            lines.append(f"- {q.get('id', '?')}: {q.get('text', '')}")
+        lines += ["", "## Agent Outputs"]
         for agent_id, output in self.agent_outputs.items():
             if output:
                 lines.append(f"### {agent_id}")
                 lines.append(f"- Goal: {output.get('character_goal', 'N/A')}")
                 lines.append(f"- Belief State: {output.get('belief_state', 'N/A')}")
-                answers = output.get('tom_answers', {})
-                lines.append(f"- Q1: {answers.get('q1_belief', 'N/A')}")
-                lines.append(f"- Q2: {answers.get('q2_desire', 'N/A')}")
-                lines.append(f"- Q3: {answers.get('q3_action', 'N/A')}")
+                for a in (output.get("tom_answers") or []):
+                    lines.append(f"- {a.get('id', '?')}: {a.get('value', 'N/A')}")
         if self.supervisor_correction:
-            lines.append("")
-            lines.append("## Supervisor Correction")
-            lines.append(self.supervisor_correction)
-
-        lines.append("")
-        lines.append("## Final Answer")
-        lines.append(f"- Q1: {self.final_answer.q1_belief}")
-        lines.append(f"- Q2: {self.final_answer.q2_desire}")
-        lines.append(f"- Q3: {self.final_answer.q3_action}")
+            lines += ["", "## Supervisor Correction", self.supervisor_correction]
+        lines += ["", "## Final Answer"]
+        for a in self.final_answer.answers:
+            lines.append(f"- {a.get('id', '?')}: {a.get('value', '')}")
         return "\n".join(lines)
 
     @classmethod
@@ -135,7 +138,6 @@ class ToMState:
         data = json.loads(json_str)
         state = cls()
         state.scenario = data.get("scenario", "")
-        state.questions = data.get("questions", {})
         state.debate_round = data.get("debate_round", 0)
         state.status = data.get("status", "pending")
         state.debate_triggered = data.get("debate_triggered", False)
@@ -144,10 +146,35 @@ class ToMState:
         state.supervisor_correction = data.get("supervisor_correction", None)
         state.dataset_id = data.get("dataset_id")
         state.agent_outputs = data.get("agent_outputs", {})
-        fa = data.get("final_answer", {})
-        state.final_answer = ToMAnswers(
-            q1_belief=fa.get("q1_belief"),
-            q2_desire=fa.get("q2_desire"),
-            q3_action=fa.get("q3_action")
-        )
+
+        # questions: migrate old dict {"q1": "...", "q2": "...", "q3": "..."} → list
+        raw_q = data.get("questions", [])
+        if isinstance(raw_q, dict):
+            state.questions = [{"id": k, "text": v} for k, v in raw_q.items() if v]
+        else:
+            state.questions = raw_q
+
+        state.final_answer = _load_tom_answers(data.get("final_answer"))
+        gt = data.get("ground_truth")
+        state.ground_truth = _load_tom_answers(gt) if gt else None
         return state
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _load_tom_answers(raw) -> ToMAnswers:
+    """Deserialise ToMAnswers from either the new list schema or the legacy dict schema."""
+    if raw is None:
+        return ToMAnswers()
+    if isinstance(raw, dict) and "answers" in raw:
+        return ToMAnswers(answers=raw["answers"])
+    if isinstance(raw, dict):
+        # Legacy: {"q1_belief": "A", "q2_desire": "B", "q3_action": "..."}
+        mapping = [
+            ("q1_belief", "q1"), ("q2_desire", "q2"), ("q3_action", "q3"),
+        ]
+        answers = [{"id": qid, "value": raw[old]} for old, qid in mapping if raw.get(old)]
+        return ToMAnswers(answers=answers)
+    if isinstance(raw, list):
+        return ToMAnswers(answers=raw)
+    return ToMAnswers()
