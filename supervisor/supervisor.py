@@ -74,8 +74,15 @@ class Supervisor:
                 provider=self.provider, base_url=self.base_url
             )
 
-        self.debate_manager = DebateManager(self.agents, self.max_rounds, self.tiebreak_agent)
         self.client = get_llm_client(provider=self.provider, base_url=self.base_url)
+        self.debate_manager = DebateManager(
+            agents=self.agents,
+            max_rounds=self.max_rounds,
+            tiebreak_agent=self.tiebreak_agent,
+            client=self.client,
+            model=self.model,
+            max_tokens=self.max_tokens,
+        )
         self.system_prompt = self._load_prompt()
         self.correction_prompt = self._load_correction_prompt()
 

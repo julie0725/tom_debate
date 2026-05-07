@@ -16,9 +16,7 @@ import logging
 import yaml
 from pathlib import Path
 
-from core.tom_task import ToMTask
 from user.ai_user import AIUser
-from data.adapters import get_adapter
 from evaluation.evaluator import Evaluator
 from evaluation.ablation import AblationRunner
 
@@ -63,78 +61,44 @@ def load_dataset(dataset_path: str) -> list:
 
 
 def run_single(config: dict):
-    """단일 샘플 테스트 (Sally-Anne 예시)"""
+    print("\n" + "="*50)
+    print("  PRISM ToM Reasoning System")
+    print("  자연어로 시나리오를 입력하세요.")
+    print("  (등장인물, 사건, 질문을 자유롭게 입력)")
+    print("="*50)
+    raw_text = input("\n입력: ").strip()
+    if not raw_text:
+        print("입력이 없습니다.")
+        return
+
     ai_user = AIUser(config=config)
-
-    scenario = """
-    Sally and Anne are in a room together.
-    Sally puts her marble in a basket and leaves the room.
-    While Sally is away, Anne moves the marble from the basket to a box.
-    Sally comes back into the room.
-    """
-
-    task = ToMTask(
-        context=scenario,
-        question="Where does Sally think the marble is? A) basket B) box",
-        gold_answer="A",
-        dataset_id="sally_anne_test",
-        metadata={
-            "q2": "Where does Sally want to look for the marble? A) basket B) box",
-            "q3": "Where will Sally look for the marble?",
-            "gold_q2": "A",
-            "gold_q3": "Sally will look in the basket",
-        },
-    )
-
-    result = ai_user.submit(task)
+    state = ai_user.submit_from_text(raw_text=raw_text)
 
     print("\n" + "="*50)
     print("  FINAL RESULT")
     print("="*50)
-    print(f"  Status         : {result.status}")
-    print(f"  Debate round   : {result.debate_round}")
-    print(f"  Q1 (Belief)    : {result.final_answer.get_value('q1')}")
-    print(f"  Q2 (Desire)    : {result.final_answer.get_value('q2')}")
-    print(f"  Q3 (Action)    : {result.final_answer.get_value('q3')}")
+    print(f"  Status       : {state.status}")
+    print(f"  Debate round : {state.debate_round}")
+    print(f"  Q1 (Belief)  : {state.final_answer.get_value('q1')}")
+    print(f"  Q2 (Desire)  : {state.final_answer.get_value('q2')}")
+    print(f"  Q3 (Action)  : {state.final_answer.get_value('q3')}")
     print("="*50)
 
 
 def run_batch(config: dict, dataset_path: str, limit: int = None):
-    """Load via adapter, run pipeline, evaluate."""
-    dataset_name = Path(dataset_path).parent.name
-    results_file = f"results_{dataset_name}.jsonl"
+    """Auto-detect adapter, run pipeline, evaluate."""
     if "evaluation" not in config:
         config["evaluation"] = {}
-    config["evaluation"]["results_file"] = results_file
-    output_dir = Path(config["evaluation"].get("output_dir", "outputs/"))
-    results_path = output_dir / results_file
-    if results_path.exists():
-        results_path.unlink()
 
-    adapter = get_adapter(dataset_name, dataset_path)
-    tasks = list(adapter.load())
-    if limit:
-        tasks = tasks[:limit]
-
-    if not tasks:
-        logger.error(f"No samples loaded from: {dataset_path}")
-        return
-
-    print(f"data 개수 : {len(tasks)}")
     ai_user = AIUser(config=config)
+    ai_user.submit_from_dataset(dataset_path, limit=limit)
 
-    for i, task in enumerate(tasks):
-        logger.info(f"Processing sample {i+1}/{len(tasks)} | id={task.dataset_id}")
-        try:
-            ai_user.submit(task)
-        except Exception as e:
-            logger.error(f"Sample {task.dataset_id} failed: {e}")
+    # results_file was injected into config by submit_from_dataset
+    results_file = config["evaluation"]["results_file"]
+    output_file = results_file.replace("results_", "evaluation_").replace(".jsonl", ".json")
 
     evaluator = Evaluator(output_dir=config["evaluation"]["output_dir"])
-    evaluator.evaluate_from_jsonl(
-        results_file=results_file,
-        output_file=f"evaluation_{dataset_name}.json"
-    )
+    evaluator.evaluate_from_jsonl(results_file=results_file, output_file=output_file)
 
 
 def run_ablation(config: dict, dataset_path: str):

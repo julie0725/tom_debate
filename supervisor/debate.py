@@ -2,13 +2,17 @@
 debate.py
 """
 import asyncio
+import copy
+import json
 import logging
 import re
 from collections import Counter
 from dataclasses import asdict
+from pathlib import Path
 
 from core.context_file import ToMState, ToMAnswers, get_answer_value
 from core.message_pool import MessagePool
+from core.llm_client import call_llm
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +39,36 @@ def _parse_final_answer(fa) -> dict:
 
 
 class DebateManager:
-    def __init__(self, agents: dict, max_rounds: int, tiebreak_agent: int = 3):
+    def __init__(
+        self,
+        agents: dict,
+        max_rounds: int,
+        tiebreak_agent: int = 3,
+        client=None,
+        model: str = "gpt-3.5-turbo",
+        max_tokens: int = 2000,
+    ):
         self.agents = agents
         self.max_rounds = max_rounds
         self.tiebreak_agent = tiebreak_agent
+        self.client = client
+        self.model = model
+        self.max_tokens = max_tokens
+        self._critique_prompt = self._load_prompt("debate_critique_prompt.txt")
+        self._rebuttal_prompt = self._load_prompt("debate_rebuttal_prompt.txt")
+
+    def _load_prompt(self, filename: str) -> str:
+        p = Path(__file__).parent.parent / "prompts" / filename
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    # ── Main debate loop ──────────────────────────────────────────────────────
 
     async def run_debate(
         self,
         pool: MessagePool,
         supervisor_call_fn,
         supervisor_correction_fn=None,
-        run_logger=None
+        run_logger=None,
     ) -> ToMAnswers:
 
         for round_num in range(1, self.max_rounds + 1):
@@ -53,12 +76,17 @@ class DebateManager:
             pool.update_debate_round(round_num)
 
             state = pool.get_state()
-            outputs_before = dict(state.agent_outputs)
+            outputs_before = copy.deepcopy(state.agent_outputs)
 
-            await self._re_reason_all(pool)
+            critiques = await self._run_critique_phase(pool, round_num, run_logger)
+            self._print_critique_phase(round_num, critiques)
+
+            rebuttal_results = await self._run_rebuttal_phase(pool, round_num, critiques, run_logger)
+            self._print_rebuttal_phase(round_num, rebuttal_results)
 
             state = pool.get_state()
             result = supervisor_call_fn(state, debate_round=round_num)
+            self._print_round_result(round_num, result)
             logger.info(f"[Debate] Round {round_num} agreement={result.get('agreement')}")
 
             if run_logger:
@@ -67,7 +95,7 @@ class DebateManager:
                     debate_context=state.debate_context,
                     agent_outputs_before=outputs_before,
                     agent_outputs_after=dict(state.agent_outputs),
-                    supervisor_result=result
+                    supervisor_result=result,
                 )
                 run_logger.log_agent_outputs(state.agent_outputs, label=f"debate_round_{round_num:02d}")
                 run_logger.log_context_file(asdict(state), label=f"debate_round_{round_num:02d}")
@@ -107,31 +135,179 @@ class DebateManager:
         state.majority_vote_applied = True
         return self._majority_vote(state)
 
-    async def _re_reason_all(self, pool: MessagePool) -> None:
-        state = pool.get_state()
-        debate_context = {"round": state.debate_round}
-        for agent_id in self.agents:
-            other_outputs = {
-                aid: out
-                for aid, out in state.agent_outputs.items()
-                if aid != f"agent{agent_id}" and out is not None
-            }
-            debate_context[f"agent{agent_id}"] = {"other_outputs": other_outputs}
+    # ── Phase 1: Critique ─────────────────────────────────────────────────────
 
-        pool.update_debate_context(debate_context)
-
+    async def _run_critique_phase(
+        self, pool: MessagePool, round_num: int, run_logger=None
+    ) -> dict:
+        """Each agent critiques the other two, citing specific timeline events."""
         state = pool.get_state()
         state_dict = asdict(state)
+        agent_ids = list(self.agents.keys())
 
-        async def re_reason_agent(agent_id, agent):
-            loop = asyncio.get_event_loop()
-            output = await loop.run_in_executor(None, agent.reason, state_dict)
-            return agent_id, output
+        async def critique_one(agent_id: int) -> tuple[int, dict]:
+            agent_key = f"agent{agent_id}"
+            user_content = (
+                f"You are agent{agent_id}.\n\n"
+                f"Scenario:\n{state_dict['scenario']}\n\n"
+                f"Questions:\n{json.dumps(state_dict['questions'], ensure_ascii=False)}\n\n"
+                f"All agents' current outputs:\n"
+                f"{json.dumps(state_dict['agent_outputs'], ensure_ascii=False, indent=2)}\n\n"
+                f"Critique the reasoning of every agent EXCEPT yourself. "
+                f"Cite specific event numbers as evidence. "
+                f"Set critique_of_{agent_key} to empty string."
+            )
+            raw = await asyncio.get_event_loop().run_in_executor(
+                None, call_llm,
+                self.client, self.model, self._critique_prompt, user_content, self.max_tokens,
+            )
+            cleaned = re.sub(r"```json|```", "", raw).strip()
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                logger.warning(f"[Debate] Critique JSON parse error (agent{agent_id}): {raw[:120]}")
+                parsed = {f"critique_of_agent{aid}": "" for aid in agent_ids}
+                parsed["my_answer"] = ""
+            parsed[f"critique_of_{agent_key}"] = ""   # enforce own field empty
+            parsed["agent_id"] = agent_id
+            return agent_id, parsed
 
-        tasks = [re_reason_agent(aid, agent) for aid, agent in self.agents.items()]
-        results = await asyncio.gather(*tasks)
-        for agent_id, output in results:
-            pool.update_agent_output(agent_id, output)
+        results = await asyncio.gather(*[critique_one(aid) for aid in agent_ids])
+        critiques = {f"agent{aid}": out for aid, out in results}
+
+        context = {
+            "round": round_num,
+            "phase": "critique",
+            **{f"agent{aid}_critique": out for aid, out in results},
+        }
+        pool.update_debate_context(context)
+
+        if run_logger:
+            run_logger.log_context_file(asdict(pool.get_state()), label=f"critique_round_{round_num:02d}")
+
+        logger.info(f"[Debate] Critique phase done (round {round_num})")
+        return critiques
+
+    # ── Phase 2: Rebuttal ─────────────────────────────────────────────────────
+
+    async def _run_rebuttal_phase(
+        self, pool: MessagePool, round_num: int, critiques: dict, run_logger=None
+    ) -> None:
+        """Each agent rebuts critiques directed at it and updates its answer."""
+        state = pool.get_state()
+        state_dict = asdict(state)
+        agent_ids = list(self.agents.keys())
+
+        async def rebuttal_one(agent_id: int) -> tuple[int, dict]:
+            agent_key = f"agent{agent_id}"
+            incoming = {
+                critic_key: c_out.get(f"critique_of_{agent_key}", "")
+                for critic_key, c_out in critiques.items()
+                if critic_key != agent_key
+                and c_out.get(f"critique_of_{agent_key}")
+            }
+            user_content = (
+                f"You are agent{agent_id}.\n\n"
+                f"Scenario:\n{state_dict['scenario']}\n\n"
+                f"Questions:\n{json.dumps(state_dict['questions'], ensure_ascii=False)}\n\n"
+                f"Your current output:\n"
+                f"{json.dumps(state_dict['agent_outputs'].get(agent_key, {}), ensure_ascii=False, indent=2)}\n\n"
+                f"Critiques directed at you:\n"
+                f"{json.dumps(incoming, ensure_ascii=False, indent=2)}"
+            )
+            raw = await asyncio.get_event_loop().run_in_executor(
+                None, call_llm,
+                self.client, self.model, self._rebuttal_prompt, user_content, self.max_tokens,
+            )
+            cleaned = re.sub(r"```json|```", "", raw).strip()
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                logger.warning(f"[Debate] Rebuttal JSON parse error (agent{agent_id}): {raw[:120]}")
+                parsed = {"rebuttal": raw[:300], "my_answer": ""}
+            parsed["agent_id"] = agent_id
+            return agent_id, parsed
+
+        results = await asyncio.gather(*[rebuttal_one(aid) for aid in agent_ids])
+
+        # Merge revised my_answer back into each agent's tom_answers (q1)
+        for agent_id, rebuttal_out in results:
+            agent_key = f"agent{agent_id}"
+            new_letter = _extract_choice_letter(rebuttal_out.get("my_answer", ""))
+            if new_letter:
+                current = dict(state.agent_outputs.get(agent_key) or {})
+                tom = list(current.get("tom_answers") or [])
+                updated = False
+                for entry in tom:
+                    if entry.get("id") == "q1":
+                        entry["value"] = new_letter
+                        updated = True
+                        break
+                if not updated:
+                    tom = [{"id": "q1", "value": new_letter}] + tom
+                pool.update_agent_output(agent_id, {**current, "tom_answers": tom})
+
+        # Combined context carries both phases so the logger can render the full transcript
+        context = {
+            "round": round_num,
+            "phase": "combined",
+            **{f"{k}_critique": v for k, v in critiques.items()},
+            **{f"agent{aid}_rebuttal": out for aid, out in results},
+        }
+        pool.update_debate_context(context)
+
+        if run_logger:
+            run_logger.log_context_file(asdict(pool.get_state()), label=f"rebuttal_round_{round_num:02d}")
+
+        logger.info(f"[Debate] Rebuttal phase done (round {round_num})")
+        return results
+
+    # ── Console transcript printers ───────────────────────────────────────────
+
+    @staticmethod
+    def _print_critique_phase(round_num: int, critiques: dict) -> None:
+        W = 40
+        print(f"\n{'=' * W}")
+        print(f"[Round {round_num}] CRITIQUE PHASE")
+        print(f"{'=' * W}")
+        for src_key in ["agent1", "agent2", "agent3"]:
+            c_out = critiques.get(src_key, {})
+            for tgt_key in ["agent1", "agent2", "agent3"]:
+                if tgt_key == src_key:
+                    continue
+                crit_text = str(c_out.get(f"critique_of_{tgt_key}", ""))
+                if crit_text:
+                    trail = "..." if len(crit_text) > 150 else ""
+                    src = src_key.replace("agent", "Agent")
+                    tgt = tgt_key.replace("agent", "Agent")
+                    print(f"{src} → {tgt}: \"{crit_text[:150]}{trail}\"")
+
+    @staticmethod
+    def _print_rebuttal_phase(round_num: int, rebuttal_results) -> None:
+        W = 40
+        print(f"\n{'=' * W}")
+        print(f"[Round {round_num}] REBUTTAL PHASE")
+        print(f"{'=' * W}")
+        for agent_id, r_out in sorted(rebuttal_results, key=lambda x: x[0]):
+            rebuttal_text = str(r_out.get("rebuttal", ""))
+            answer = r_out.get("my_answer", "?")
+            trail = "..." if len(rebuttal_text) > 150 else ""
+            print(f"Agent{agent_id} rebuttal: \"{rebuttal_text[:150]}{trail}\"")
+            print(f"  → answer: {answer}")
+
+    @staticmethod
+    def _print_round_result(round_num: int, result: dict) -> None:
+        W = 40
+        print(f"\n{'=' * W}")
+        print(f"[Round {round_num}] RESULT")
+        print(f"{'=' * W}")
+        print(f"Agreement: {result.get('agreement', '?')}")
+        reasoning = str(result.get("supervisor_reasoning", ""))
+        if reasoning:
+            trail = "..." if len(reasoning) > 200 else ""
+            print(f"Supervisor reasoning: \"{reasoning[:200]}{trail}\"")
+
+    # ── Fresh re-reason (after correction) ───────────────────────────────────
 
     async def _re_reason_fresh(self, pool: MessagePool) -> None:
         state = pool.get_state()
@@ -142,10 +318,11 @@ class DebateManager:
             output = await loop.run_in_executor(None, agent.reason, state_dict)
             return agent_id, output
 
-        tasks = [re_reason_agent(aid, agent) for aid, agent in self.agents.items()]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*[re_reason_agent(aid, ag) for aid, ag in self.agents.items()])
         for agent_id, output in results:
             pool.update_agent_output(agent_id, output)
+
+    # ── Majority vote ─────────────────────────────────────────────────────────
 
     def _majority_vote(self, state: ToMState) -> ToMAnswers:
         outputs = [
@@ -154,7 +331,6 @@ class DebateManager:
             if state.agent_outputs.get(f"agent{i}") is not None
         ]
 
-        # Collect question IDs present in agent outputs
         q_ids: list[str] = []
         for out in outputs:
             if out:
@@ -165,7 +341,7 @@ class DebateManager:
         if not q_ids:
             q_ids = ["q1"]
 
-        def vote_for_question(q_id: str) -> str:
+        def vote_for(q_id: str) -> str:
             votes = [
                 _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
                 for out in outputs
@@ -183,9 +359,11 @@ class DebateManager:
                 return _extract_choice_letter(tb_val) or top[0][0]
             return top[0][0]
 
-        result = ToMAnswers(answers=[{"id": qid, "value": vote_for_question(qid)} for qid in q_ids])
+        result = ToMAnswers(answers=[{"id": qid, "value": vote_for(qid)} for qid in q_ids])
         logger.info(f"[Debate] Majority vote result: {result}")
         return result
+
+    # ── Answer extraction ─────────────────────────────────────────────────────
 
     def _extract_answer(self, supervisor_result: dict, state: ToMState = None) -> ToMAnswers:
         ans_map = _parse_final_answer(supervisor_result.get("final_answer"))
@@ -197,7 +375,6 @@ class DebateManager:
                 tom_ans = output.get("tom_answers")
                 q1_val = _extract_choice_letter(get_answer_value(tom_ans, "q1"))
                 if q1_val:
-                    # Collect all question answers from this agent as fallback
                     if isinstance(tom_ans, list):
                         for a in tom_ans:
                             qid = a.get("id")

@@ -19,6 +19,11 @@ R8. Answer    — For each question in the input questions list, add one entry t
                Open-ended: value is a concise answer string.
                Also copy the primary answer into answer.response for compatibility.
 R9. Format    — Output ONE valid JSON object. No markdown or prose.
+R_STRUCT. If [STRUCTURED ToM STATE] is present:
+  - Use events[].observed_by as ground truth for epistemic access
+  - Use belief_states[] as starting point
+  - Cite events by id [Event N]
+  - Do NOT re-parse raw story text
 R10. Chain    — Simulate innermost agent first, outward. Parse "A thinks B thinks C believes P"
                → simulate C→B→A. Each step uses only that agent's epistemic access.
 R11. Projection ban — Do NOT project the target's info gap onto modeled agents.

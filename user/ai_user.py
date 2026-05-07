@@ -1,10 +1,10 @@
 """
 ai_user.py
 ----------
-AI User: 시스템의 진입점
-- ToMTask를 받아 context file(ToMState) 생성
-- 전역 메시지 풀에 publish
-- 감독관 실행 후 최종 답변 수신
+AI User: 시스템의 단일 입력 게이트웨이
+- submit_from_text()  : 직접 텍스트 입력 또는 자연어 원문 → ToMTask → pipeline
+- submit_from_dataset(): 데이터셋 경로 → adapter → ToMTask 반복 → pipeline
+- _submit()           : 내부 공통 실행자 (ToMTask → ToMState)
 """
 
 import asyncio
@@ -13,10 +13,13 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 from core.context_file import ToMState, ToMAnswers
+from core.extractor import Extractor
 from core.message_pool import get_message_pool, reset_message_pool
 from core.tom_task import ToMTask
+from data.adapters.proxy import Proxy
 from supervisor.supervisor import Supervisor
 
 logger = logging.getLogger(__name__)
@@ -27,17 +30,80 @@ class AIUser:
         self.config = config
         self.output_dir = Path(config.get("evaluation", {}).get("output_dir", "outputs/"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.proxy = Proxy(config)
+        self.extractor = Extractor(config)
 
-    def submit(self, task: ToMTask) -> ToMState:
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def submit_from_text(
+        self,
+        raw_text: str = "",
+        scenario: Optional[str] = None,
+        question: Optional[str] = None,
+        gold_answer: Optional[str] = None,
+        dataset_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> ToMState:
+        """Run the pipeline from either explicit scenario+question or a raw natural language string.
+
+        - scenario and question both given → build ToMTask directly (structured input)
+        - only raw_text given → Proxy routes through TextAdapter (LLM extraction)
+        """
+        if scenario and question:
+            task = ToMTask(
+                context=scenario,
+                question=question,
+                gold_answer=gold_answer,
+                dataset_id=dataset_id or "manual",
+                metadata=metadata or {},
+            )
+        else:
+            tasks = list(self.proxy.get_tasks(raw_text))
+            if not tasks:
+                raise ValueError("[AIUser] TextAdapter returned no tasks")
+            task = tasks[0]
+        return self._submit(task)
+
+    def submit_from_dataset(
+        self,
+        path: str,
+        limit: Optional[int] = None,
+    ) -> None:
+        """Auto-detect adapter from path, load tasks, and run the pipeline for each."""
+        dataset_stem = Path(path).stem
+        results_file = f"results_{dataset_stem}.jsonl"
+        if "evaluation" not in self.config:
+            self.config["evaluation"] = {}
+        self.config["evaluation"]["results_file"] = results_file
+
+        results_path = self.output_dir / results_file
+        if results_path.exists():
+            results_path.unlink()
+
+        tasks = list(self.proxy.get_tasks(path, limit))
+
+        if not tasks:
+            logger.error(f"[AIUser] No samples loaded from: {path}")
+            return
+
+        print(f"data 개수 : {len(tasks)}")
+        for i, task in enumerate(tasks):
+            logger.info(f"[AIUser] Processing {i + 1}/{len(tasks)} | id={task.dataset_id}")
+            try:
+                self._submit(task)
+            except Exception as e:
+                logger.error(f"[AIUser] Sample {task.dataset_id} failed: {e}")
+
+    # ── Internal executor ─────────────────────────────────────────────────────
+
+    def _submit(self, task: ToMTask) -> ToMState:
         """Run the full pipeline for a single ToMTask and return the final state."""
-        # Build questions list from task (primary question + optional q2/q3 from metadata)
         questions = [{"id": "q1", "text": task.question}]
         if task.metadata.get("q2"):
             questions.append({"id": "q2", "text": task.metadata["q2"]})
         if task.metadata.get("q3"):
             questions.append({"id": "q3", "text": task.metadata["q3"]})
 
-        # Build ground_truth as dataset-independent ToMAnswers
         ground_truth = None
         if task.gold_answer is not None:
             gt_answers = [{"id": "q1", "value": task.gold_answer}]
@@ -47,11 +113,16 @@ class AIUser:
                 gt_answers.append({"id": "q3", "value": task.metadata["gold_q3"]})
             ground_truth = ToMAnswers(answers=gt_answers)
 
+        common_state = self.extractor.extract(task)
+
         state = ToMState(
             scenario=task.context,
             questions=questions,
             dataset_id=task.dataset_id,
             ground_truth=ground_truth,
+            reasoning_type=common_state.reasoning_type,
+            characters=[c.name for c in common_state.characters],
+            common_state=common_state.to_dict(),
         )
 
         reset_message_pool()

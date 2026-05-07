@@ -98,6 +98,11 @@ class ToMState:
     # 최종 답변
     final_answer: ToMAnswers = field(default_factory=ToMAnswers)
 
+    # 추론 메타데이터
+    reasoning_type: Optional[str] = None   # "0th-order" | "1st-order" | "2nd-order" | "3rd-order"
+    characters: list = field(default_factory=list)
+    common_state: Optional[dict] = None    # CommonToMState.to_dict()
+
     # 메타데이터
     dataset_id: Optional[str] = None
     ground_truth: Optional[ToMAnswers] = None
@@ -154,6 +159,9 @@ class ToMState:
         else:
             state.questions = raw_q
 
+        state.reasoning_type = data.get("reasoning_type", None)
+        state.characters = data.get("characters", [])
+        state.common_state = data.get("common_state", None)
         state.final_answer = _load_tom_answers(data.get("final_answer"))
         gt = data.get("ground_truth")
         state.ground_truth = _load_tom_answers(gt) if gt else None
