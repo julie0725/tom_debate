@@ -153,5 +153,12 @@ The supervisor analyzed previous reasoning errors and provides the following gui
 Please re-reason from scratch, carefully incorporating the supervisor's correction.
 """
 
+        questions = state_dict.get("questions", [])
+        if questions:
+            prompt += "\n[QUESTIONS — answer every question listed below]\n"
+            for q in questions:
+                prompt += f"  {q.get('id', '?')}: {q.get('text', '')}\n"
+            prompt += "You MUST include one entry per question ID in tom_answers.\n"
+
         prompt += "\nRespond ONLY in valid JSON format.\n"
         return prompt
