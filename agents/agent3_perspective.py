@@ -22,31 +22,24 @@ class Agent3Perspective(BaseAgent):
         raw = self._call_llm(user_prompt)
         parsed = self._parse_json_response(raw)
 
-        answer_block = parsed.get("answer", {})
         tom_answers = self._build_tom_answers(parsed, state_dict)
 
-        raw_sims = parsed.get("intermediate_simulations", [])
-        update_log = {}
-        if isinstance(raw_sims, list):
-            for sim in raw_sims:
-                agent = sim.get("simulated_agent", "?")
-                order = sim.get("simulation_order", 0)
-                belief = sim.get("derived_belief", "?")
-                evidence = sim.get("evidence_events", [])
-                key = f"{order}" if evidence else f"sim_{order}"
-                if key not in update_log:
-                    update_log[key] = {}
-                update_log[key][agent] = {"goal": "위치 추적", "belief": belief}
-        elif isinstance(raw_sims, dict):
-            update_log = raw_sims
+        update_log = {
+            str(step.get("step", i)): {
+                "agent": step.get("agent", ""),
+                "derived_belief": step.get("derived_belief", ""),
+                "witnessed_events": step.get("witnessed_events", []),
+                "input_to_next": step.get("input_to_next", ""),
+            }
+            for i, step in enumerate(parsed.get("simulation_chain") or [])
+        }
 
         return {
             "agent_id": 3,
-            "character_goal": parsed.get("focal_character", ""),
+            "character_goal": "",
             "truth_judgment": None,
             "update_log": update_log,
-            "belief_state": parsed.get("higher_order_beliefs", []),
-            "tom_answer": answer_block.get("response", ""),
-            "reasoning": answer_block.get("rationale", ""),
+            "belief_state": parsed.get("internal_layers", {}),
+            "reasoning": parsed.get("mode", ""),
             "tom_answers": tom_answers,
         }
