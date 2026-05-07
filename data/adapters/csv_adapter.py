@@ -71,45 +71,39 @@ class CsvAdapter(DatasetAdapter):
         b_aware, d_aware, a_aware = row[8].strip(), row[9].strip(), row[10].strip()
         b_not, d_not, a_not = row[11].strip(), row[12].strip(), row[13].strip()
 
+        if not belief_q:
+            return []
+
         tasks = []
         sid = base_id
 
         for condition in ("true_belief", "false_belief"):
             story, character, event_count = cls._to_event_story(row, condition)
             gold = "A" if condition == "true_belief" else "B"
-            _ORDER_TO_REASONING = {1: "1st-order", 2: "2nd-order", 3: "3rd-order"}
             characters = [character] if character else []
-            meta_base = {"condition": condition, "characters": characters, "event_count": event_count}
-
-            if belief_q:
-                tasks.append(ToMTask(
-                    context=story,
-                    question=f"{cls._strip_options(belief_q)}\nChoices: A. {b_aware}, B. {b_not}",
-                    gold_answer=gold,
-                    dataset_id=str(sid),
-                    metadata={**meta_base, "question_order": 1, "reasoning_type": _ORDER_TO_REASONING[1]},
-                ))
-                sid += 1
+            meta = {
+                "condition": condition,
+                "characters": characters,
+                "event_count": event_count,
+                "reasoning_type": "1st-order",
+            }
 
             if desire_q and d_aware != d_not:
-                tasks.append(ToMTask(
-                    context=story,
-                    question=f"{cls._strip_options(desire_q)}\nChoices: A. {d_aware}, B. {d_not}",
-                    gold_answer=gold,
-                    dataset_id=str(sid),
-                    metadata={**meta_base, "question_order": 2, "reasoning_type": _ORDER_TO_REASONING[2]},
-                ))
-                sid += 1
+                meta["q2"] = f"{cls._strip_options(desire_q)}\nChoices: A. {d_aware}, B. {d_not}"
+                meta["gold_q2"] = gold
 
             if action_q:
-                tasks.append(ToMTask(
-                    context=story,
-                    question=f"{cls._strip_options(action_q)}\nChoices: A. {a_aware}, B. {a_not}",
-                    gold_answer=gold,
-                    dataset_id=str(sid),
-                    metadata={**meta_base, "question_order": 3, "reasoning_type": _ORDER_TO_REASONING[3]},
-                ))
-                sid += 1
+                meta["q3"] = f"{cls._strip_options(action_q)}\nChoices: A. {a_aware}, B. {a_not}"
+                meta["gold_q3"] = gold
+
+            tasks.append(ToMTask(
+                context=story,
+                question=f"{cls._strip_options(belief_q)}\nChoices: A. {b_aware}, B. {b_not}",
+                gold_answer=gold,
+                dataset_id=str(sid),
+                metadata=meta,
+            ))
+            sid += 1
 
         return tasks
 
