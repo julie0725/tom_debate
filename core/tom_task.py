@@ -4,7 +4,7 @@ from typing import Optional
 
 @dataclass
 class ToMTask:
-    """Single unit of work passed from a DatasetAdapter into the pipeline."""
+    """Single unit of work passed from a data adapter into the pipeline."""
     context: str
     question: str
     gold_answer: Optional[str] = None

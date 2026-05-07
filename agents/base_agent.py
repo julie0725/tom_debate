@@ -89,20 +89,58 @@ class BaseAgent(ABC):
 Current context file:
 {json.dumps(state_dict, ensure_ascii=False, indent=2)}
 """
-        # MessagePool 기반 debate_context 읽기 (직접 전달 대신 state_dict에서 추출)
+        # MessagePool 기반 debate_context 읽기 — critique/rebuttal phase 구조 처리
         pool_ctx = state_dict.get("debate_context", {})
         if pool_ctx:
-            agent_key = f"agent{self.agent_id}"
-            my_ctx = pool_ctx.get(agent_key, {})
-            other_outputs = my_ctx.get("other_outputs", {})
+            phase = pool_ctx.get("phase", "")
             round_num = pool_ctx.get("round", 1)
-            if other_outputs:
-                prompt += f"""
-[DEBATE CONTEXT - Round {round_num}]
-Other agents' outputs for your reference:
-{json.dumps(other_outputs, ensure_ascii=False, indent=2)}
+            agent_key = f"agent{self.agent_id}"
 
-Reconsider your answers based on the above. You may update or maintain your position.
+            if phase in ("critique", "combined"):
+                # Collect critiques directed at this agent from other agents
+                incoming = [
+                    (key.replace("_critique", ""), val.get(f"critique_of_{agent_key}", ""))
+                    for key, val in pool_ctx.items()
+                    if key.endswith("_critique")
+                    and key != f"{agent_key}_critique"
+                    and val.get(f"critique_of_{agent_key}")
+                ]
+                if incoming:
+                    prompt += f"\n[DEBATE CONTEXT - Round {round_num}]\n"
+                    for critic, crit_text in incoming:
+                        prompt += f"\n[CRITIQUE FROM {critic}]\n{crit_text}\n"
+                    prompt += "\nReconsider your answer in light of the above critiques. You may update or maintain your position.\n"
+
+            if phase == "combined":
+                # Include this agent's own rebuttal for continuity
+                my_rebuttal = pool_ctx.get(f"{agent_key}_rebuttal") or {}
+                rebuttal_text = my_rebuttal.get("rebuttal", "")
+                if rebuttal_text:
+                    prompt += f"\n[YOUR PREVIOUS REBUTTAL]\n{rebuttal_text}\n"
+
+        # Structured ToM state from Extractor layer
+        common = state_dict.get("common_state")
+        if common:
+            prompt += f"""
+[STRUCTURED ToM STATE]
+Use this structured information to reason. Cite events by id e.g. [Event 3].
+
+Events (with observers):
+{json.dumps(common.get("events", []), ensure_ascii=False, indent=2)}
+
+Characters (entry/exit tracking):
+{json.dumps(common.get("characters", []), ensure_ascii=False, indent=2)}
+
+Belief States (based on observation access only):
+{json.dumps(common.get("belief_states", []), ensure_ascii=False, indent=2)}
+
+Goals:
+{json.dumps(common.get("goals", []), ensure_ascii=False, indent=2)}
+
+Reasoning Type: {common.get("reasoning_type")}
+
+Raw story is also provided above for reference.
+Do NOT re-parse raw story — use structured state above as primary source.
 """
 
         # 감독관 오류 분석 결과 반영 (max_rounds 초과 후 처음부터 재추론 시)

@@ -20,6 +20,11 @@ R8. Answer       — For each question in the input questions list, add one entr
                Open-ended: value is a concise answer string.
                Also copy the primary answer into answer.response for compatibility.
 R9. Format       — Output ONE valid JSON object. No markdown or prose.
+R_STRUCT. If [STRUCTURED ToM STATE] is present:
+  - Use events[].observed_by as ground truth for epistemic access
+  - Use belief_states[] as starting point
+  - Cite events by id [Event N]
+  - Do NOT re-parse raw story text
 R10. Chain       — Simulate innermost agent first, outward. Each step's output feeds the next.
 R11. Projection ban — Do NOT project the target's info gap onto modeled agents.
                 Check each chain agent's presence at relevant events independently via belief_update_log.

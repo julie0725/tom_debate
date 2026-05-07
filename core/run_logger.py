@@ -18,6 +18,9 @@ from core.context_file import get_answer_value
 
 logger = logging.getLogger(__name__)
 
+_AGENT_ROLES = {"agent1": "Semantic", "agent2": "Ego", "agent3": "Observer"}
+_W = 60  # console width
+
 
 class RunLogger:
     """
@@ -185,26 +188,60 @@ class RunLogger:
 
     def _format_debate_context(self, debate_context: dict) -> dict:
         """
-        debate_context를 '에이전트가 보는 내용' 형식으로 정리
+        debate_context를 가독성 있는 형식으로 정리.
+        critique/rebuttal phase 구조와 legacy other_outputs 구조 모두 처리.
         """
         if not debate_context:
             return {}
 
-        formatted = {"_round": debate_context.get("round", "?")}
-        for agent_key in ["agent1", "agent2", "agent3"]:
-            ctx = debate_context.get(agent_key, {})
-            other_outputs = ctx.get("other_outputs", {})
+        phase = debate_context.get("phase", "legacy")
+        formatted = {"_round": debate_context.get("round", "?"), "_phase": phase}
 
-            # 각 에이전트가 보는 다른 에이전트의 tom_answer만 추출 (가독성)
-            sees = {}
-            for other_key, other_out in other_outputs.items():
-                if other_out:
-                    sees[other_key] = {
-                        "tom_answer": get_answer_value(other_out.get("tom_answers", []), "q1") or "?",
-                        "reasoning_summary": str(other_out.get("reasoning", ""))[:200],
-                        "full_output": other_out,
+        if phase == "combined":
+            for agent_key in ["agent1", "agent2", "agent3"]:
+                c = debate_context.get(f"{agent_key}_critique", {})
+                r = debate_context.get(f"{agent_key}_rebuttal", {})
+                formatted[agent_key] = {
+                    "critique_answer": c.get("my_answer", "?"),
+                    "critiques_given": {
+                        k: v for k, v in c.items()
+                        if k.startswith("critique_of_") and v
+                    },
+                    "rebuttal_answer": r.get("my_answer", "?"),
+                    "rebuttal": str(r.get("rebuttal", ""))[:400],
+                }
+        elif phase == "critique":
+            for agent_key in ["agent1", "agent2", "agent3"]:
+                entry = debate_context.get(f"{agent_key}_critique", {})
+                if entry:
+                    formatted[f"{agent_key}_critique"] = {
+                        "my_answer": entry.get("my_answer", "?"),
+                        "critiques_given": {
+                            k: v for k, v in entry.items()
+                            if k.startswith("critique_of_") and v
+                        },
                     }
-            formatted[f"{agent_key}_sees"] = sees
+        elif phase == "rebuttal":
+            for agent_key in ["agent1", "agent2", "agent3"]:
+                entry = debate_context.get(f"{agent_key}_rebuttal", {})
+                if entry:
+                    formatted[f"{agent_key}_rebuttal"] = {
+                        "my_answer": entry.get("my_answer", "?"),
+                        "rebuttal_summary": str(entry.get("rebuttal", ""))[:300],
+                    }
+        else:
+            # Legacy: debate_context[agent_key] = {"other_outputs": {...}}
+            for agent_key in ["agent1", "agent2", "agent3"]:
+                ctx = debate_context.get(agent_key, {})
+                other_outputs = ctx.get("other_outputs", {})
+                sees = {}
+                for other_key, other_out in other_outputs.items():
+                    if other_out:
+                        sees[other_key] = {
+                            "tom_answer": get_answer_value(other_out.get("tom_answers", []), "q1") or "?",
+                            "reasoning_summary": str(other_out.get("reasoning", ""))[:200],
+                        }
+                formatted[f"{agent_key}_sees"] = sees
 
         return formatted
 
@@ -217,34 +254,61 @@ class RunLogger:
         return result
 
     def _print_debate_round(self, round_log: dict):
-        """토론 라운드 요약 콘솔 출력"""
+        """토론 라운드 요약 콘솔 출력 — critique-rebuttal transcript 형식"""
         r = round_log["_round"]
-        print(f"\n{'═'*60}")
-        print(f"  DEBATE ROUND {r}")
-        print(f"{'═'*60}")
-
-        print("  [각 에이전트가 보는 다른 에이전트 답변]")
-        what_sees = round_log.get("what_agents_see", {})
-        for agent_key in ["agent1", "agent2", "agent3"]:
-            sees = what_sees.get(f"{agent_key}_sees", {})
-            if sees:
-                others = {k: v["tom_answer"] for k, v in sees.items()}
-                print(f"    {agent_key} sees → {others}")
-
-        print("\n  [재추론 후 답변]")
-        after = round_log.get("agent_outputs_after_reInfer", {})
-        for key, ans in after.items():
-            q1 = get_answer_value(ans, "q1") or "?"
-            q2 = get_answer_value(ans, "q2") or "?"
-            q3 = get_answer_value(ans, "q3") or "?"
-            print(f"    {key}: q1={q1} | q2={q2} | q3={q3}")
-
+        ctx = round_log.get("what_agents_see", {})
+        phase = ctx.get("_phase", "legacy")
         sup = round_log.get("supervisor_result", {})
+
+        print(f"\n{'═' * _W}")
+        print(f"  DEBATE ROUND {r}")
+        print(f"{'═' * _W}")
+
+        if phase == "combined":
+            print("[CRITIQUE PHASE]")
+            for agent_key in ["agent1", "agent2", "agent3"]:
+                data = ctx.get(agent_key, {})
+                if not data:
+                    continue
+                role = _AGENT_ROLES.get(agent_key, agent_key)
+                print(f"  {agent_key} ({role}) → current answer: {data.get('critique_answer', '?')}")
+                for crit_key, crit_text in data.get("critiques_given", {}).items():
+                    if not crit_text:
+                        continue
+                    target = crit_key.replace("critique_of_", "")
+                    snippet = str(crit_text)
+                    trail = "..." if len(snippet) > 120 else ""
+                    print(f"    ▸ to {target}: \"{snippet[:120]}{trail}\"")
+
+            print(f"  {'─' * (_W - 2)}")
+
+            print("[REBUTTAL PHASE]")
+            for agent_key in ["agent1", "agent2", "agent3"]:
+                data = ctx.get(agent_key, {})
+                if not data:
+                    continue
+                role = _AGENT_ROLES.get(agent_key, agent_key)
+                print(f"  {agent_key} ({role}) → updated answer: {data.get('rebuttal_answer', '?')}")
+                rebuttal_text = str(data.get("rebuttal", ""))
+                if rebuttal_text:
+                    trail = "..." if len(rebuttal_text) > 120 else ""
+                    print(f"    ▸ rebuttal: \"{rebuttal_text[:120]}{trail}\"")
+
+        else:
+            # Legacy: simple answer summary
+            after = round_log.get("agent_outputs_after_reInfer", {})
+            for key, ans in after.items():
+                q1 = get_answer_value(ans, "q1") or "?"
+                q2 = get_answer_value(ans, "q2") or "?"
+                q3 = get_answer_value(ans, "q3") or "?"
+                print(f"  {key}: q1={q1} | q2={q2} | q3={q3}")
+
         agree = sup.get("agreement", "?")
-        print(f"\n  [감독관 판단] agreement={agree}")
-        if sup.get("supervisor_reasoning"):
-            print(f"    reasoning: {sup['supervisor_reasoning'][:200]}")
-        print(f"{'═'*60}\n")
+        reasoning = sup.get("supervisor_reasoning", "")
+        print(f"\n  [Supervisor] agreement={agree}")
+        if reasoning:
+            print(f"    {str(reasoning)[:200]}")
+        print(f"{'═' * _W}\n")
 
     # ── 감독관 수정 로그 ──────────────────────────────────────
 

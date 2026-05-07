@@ -122,7 +122,7 @@ class AblationRunner:
                     },
                 )
                 try:
-                    ai_user.submit(task)
+                    ai_user._submit(task)
                 except Exception as e:
                     logger.error(f"[Ablation] Sample {task.dataset_id} failed: {e}")
 
