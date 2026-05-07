@@ -36,15 +36,16 @@ class Evaluator:
         fa = _to_map(final_answer)
         gt = _to_map(ground_truth)
 
-        q1_correct = self._match(fa.get("q1"), gt.get("q1"))
-        q2_correct = self._match(fa.get("q2"), gt.get("q2"))
-        q3_correct = self._match_action(fa.get("q3"), gt.get("q3"))
+        q1_correct = self._match(fa.get("q1"), gt.get("q1")) if gt.get("q1") else None
+        q2_correct = self._match(fa.get("q2"), gt.get("q2")) if gt.get("q2") else None
+        q3_correct = self._match_action(fa.get("q3"), gt.get("q3")) if gt.get("q3") else None
 
+        present = [r for r in [q1_correct, q2_correct, q3_correct] if r is not None]
         return {
             "q1_correct": q1_correct,
             "q2_correct": q2_correct,
             "q3_correct": q3_correct,
-            "all_correct": q1_correct and q2_correct and q3_correct,
+            "all_correct": all(present) if present else False,
         }
 
     def evaluate_from_jsonl(self, jsonl_path: str = None, results_file: str = None, output_file: str = "evaluation_summary.json") -> dict:
@@ -72,6 +73,7 @@ class Evaluator:
             return {"total": 0}
 
         q1_acc, q2_acc, q3_acc, all_acc = 0, 0, 0, 0
+        q1_count, q2_count, q3_count = 0, 0, 0
         debate_triggered_count = 0
         majority_vote_count = 0
         total_rounds = 0
@@ -81,9 +83,15 @@ class Evaluator:
             gt = r.get("ground_truth", {})
             if gt:
                 eval_result = self.evaluate_single(fa, gt)
-                q1_acc += int(eval_result["q1_correct"])
-                q2_acc += int(eval_result["q2_correct"])
-                q3_acc += int(eval_result["q3_correct"])
+                if eval_result["q1_correct"] is not None:
+                    q1_count += 1
+                    q1_acc += int(eval_result["q1_correct"])
+                if eval_result["q2_correct"] is not None:
+                    q2_count += 1
+                    q2_acc += int(eval_result["q2_correct"])
+                if eval_result["q3_correct"] is not None:
+                    q3_count += 1
+                    q3_acc += int(eval_result["q3_correct"])
                 all_acc += int(eval_result["all_correct"])
 
             if r.get("debate_triggered"):
@@ -94,9 +102,9 @@ class Evaluator:
 
         summary = {
             "total": total,
-            "q1_belief_accuracy": round(q1_acc / total, 4),
-            "q2_desire_accuracy": round(q2_acc / total, 4),
-            "q3_action_accuracy": round(q3_acc / total, 4),
+            "q1_belief_accuracy": round(q1_acc / q1_count, 4) if q1_count else None,
+            "q2_desire_accuracy": round(q2_acc / q2_count, 4) if q2_count else None,
+            "q3_action_accuracy": round(q3_acc / q3_count, 4) if q3_count else None,
             "joint_accuracy": round(all_acc / total, 4),
             "debate_trigger_rate": round(debate_triggered_count / total, 4),
             "majority_vote_rate": round(majority_vote_count / total, 4),
@@ -132,14 +140,17 @@ class Evaluator:
         return match_count / len(gt_keywords) >= 0.5
 
     def _print_summary(self, summary: dict) -> None:
+        def fmt(v):
+            return f"{v:.2%}" if v is not None else "N/A"
+
         print("\n" + "="*50)
         print("  EVALUATION SUMMARY")
         print("="*50)
         print(f"  Total samples       : {summary['total']}")
-        print(f"  Q1 Belief accuracy  : {summary['q1_belief_accuracy']:.2%}")
-        print(f"  Q2 Desire accuracy  : {summary['q2_desire_accuracy']:.2%}")
-        print(f"  Q3 Action accuracy  : {summary['q3_action_accuracy']:.2%}")
-        print(f"  Joint accuracy      : {summary['joint_accuracy']:.2%}")
+        print(f"  Q1 Belief accuracy  : {fmt(summary['q1_belief_accuracy'])}")
+        print(f"  Q2 Desire accuracy  : {fmt(summary['q2_desire_accuracy'])}")
+        print(f"  Q3 Action accuracy  : {fmt(summary['q3_action_accuracy'])}")
+        print(f"  Joint accuracy      : {fmt(summary['joint_accuracy'])}")
         print(f"  Debate trigger rate : {summary['debate_trigger_rate']:.2%}")
         print(f"  Majority vote rate  : {summary['majority_vote_rate']:.2%}")
         print(f"  Avg debate rounds   : {summary['avg_debate_rounds']:.2f}")
