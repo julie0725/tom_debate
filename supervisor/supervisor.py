@@ -4,11 +4,10 @@ supervisor.py
 import asyncio
 import json
 import logging
-import re
 from pathlib import Path
 from dataclasses import asdict
 
-from core.context_file import ToMState, ToMAnswers, get_answer_value
+from core.context_file import ToMState
 from core.message_pool import MessagePool
 from core.llm_client import get_llm_client, call_llm
 from core.run_logger import RunLogger
@@ -18,27 +17,6 @@ from agents.agent3_perspective import Agent3Perspective
 from supervisor.debate import DebateManager
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_choice_letter(text: str) -> str:
-    if not text:
-        return ""
-    m = re.match(r'^([A-Z])(?:\.|\s|$)', text.strip())
-    return m.group(1) if m else text.strip()
-
-
-def _parse_final_answer(fa) -> dict:
-    """Convert supervisor final_answer (list or legacy dict) to {q_id: value} map."""
-    if isinstance(fa, list):
-        return {a.get("id"): (a.get("value") or "") for a in fa if a.get("id")}
-    if isinstance(fa, dict):
-        result = {}
-        for k, v in fa.items():
-            if v:
-                qid = k.replace("_belief", "").replace("_desire", "").replace("_action", "")
-                result[qid] = v
-        return result
-    return {}
 
 
 class Supervisor:
@@ -83,15 +61,10 @@ class Supervisor:
             model=self.model,
             max_tokens=self.max_tokens,
         )
-        self.system_prompt = self._load_prompt()
         self.correction_prompt = self._load_correction_prompt()
 
         self.run_logger: RunLogger = None
         self.output_dir = config.get("evaluation", {}).get("output_dir", "outputs/")
-
-    def _load_prompt(self) -> str:
-        p = Path(__file__).parent.parent / "prompts" / "supervisor_prompt.txt"
-        return p.read_text(encoding="utf-8") if p.exists() else ""
 
     def _load_correction_prompt(self) -> str:
         p = Path(__file__).parent.parent / "prompts" / "supervisor_correction_prompt.txt"
@@ -117,11 +90,11 @@ class Supervisor:
             self.run_logger.log_agent_outputs(state.agent_outputs, label="initial")
             self.run_logger.log_context_file(asdict(state), label="after_initial_reasoning")
 
-            supervisor_result = self._call_supervisor(state, debate_round=0)
-            logger.info(f"[Supervisor] Initial check: agreement={supervisor_result.get('agreement')}")
+            agreement, _ = self.debate_manager._check_agreement(state)
+            logger.info(f"[Supervisor] Initial check: agreement={agreement}")
 
-            if supervisor_result.get("agreement") or not self.use_debate:
-                final = self._extract_final_answer(supervisor_result, state=state)
+            if agreement or not self.use_debate:
+                final = self.debate_manager._extract_answer_from_state(state)
                 self.pool.set_final_answer(final)
                 logger.info("[Supervisor] Agreement reached. No debate needed.")
             else:
@@ -131,7 +104,6 @@ class Supervisor:
                 logger.info("[Supervisor] Disagreement detected. Starting debate.")
                 final = await self.debate_manager.run_debate(
                     pool=self.pool,
-                    supervisor_call_fn=self._call_supervisor,
                     supervisor_correction_fn=self._call_supervisor_correction,
                     run_logger=self.run_logger
                 )
@@ -156,70 +128,43 @@ class Supervisor:
         results = await asyncio.gather(*tasks)
         return {aid: output for aid, output in results}
 
-    def _call_supervisor(self, state: ToMState, debate_round: int) -> dict:
+    def _call_supervisor_correction(self, state: ToMState, flags: list = None) -> str:
         state_dict = asdict(state)
 
-        # Build per-agent answer table: {agent_key: {q_id: letter}}
-        answer_table = {}
-        for agent_key, output in (state_dict.get("agent_outputs") or {}).items():
-            if output:
-                tom_ans = output.get("tom_answers", [])
-                if isinstance(tom_ans, list):
-                    answer_table[agent_key] = {
-                        a.get("id"): _extract_choice_letter(a.get("value", ""))
-                        for a in tom_ans if a.get("id")
-                    }
-                elif isinstance(tom_ans, dict):
-                    answer_table[agent_key] = {
-                        "q1": _extract_choice_letter(tom_ans.get("q1_belief", ""))
-                    }
+        filtered_outputs = {
+            agent_key: {
+                "reasoning": (output or {}).get("reasoning", ""),
+                "belief_state": (output or {}).get("belief_state"),
+                "tom_answers": (output or {}).get("tom_answers", []),
+            }
+            for agent_key, output in (state_dict.get("agent_outputs") or {}).items()
+            if output
+        }
 
-        user_content = f"""
-Current context file:
-{json.dumps(state_dict, ensure_ascii=False, indent=2)}
+        common = state_dict.get("common_state") or {}
+        filtered_common = {
+            "events": common.get("events", []),
+            "characters": common.get("characters", []),
+        }
 
-Current debate_round: {debate_round}
-Max rounds allowed: {self.max_rounds}
+        user_content = f"""Agents failed to reach consensus after {self.max_rounds} debate rounds.
 
-Normalized answer labels (letter only, for agreement check):
-{json.dumps(answer_table, ensure_ascii=False)}
+Debate flags (critique/rebuttal behavior per round):
+{json.dumps(flags or [], ensure_ascii=False, indent=2)}
 
-Your task:
-- Compare the normalized labels above for agreement on each question id
-- If all present agents share the same label for every question → agreement: true
-- Otherwise → agreement: false, trigger debate
+Agent outputs (reasoning chains and answers):
+{json.dumps(filtered_outputs, ensure_ascii=False, indent=2)}
 
-Respond ONLY in valid JSON format.
-"""
-        raw = call_llm(
-            client=self.client,
-            model=self.model,
-            system_prompt=self.system_prompt,
-            user_content=user_content,
-            max_tokens=self.max_tokens
-        )
-        cleaned = re.sub(r"```json|```", "", raw).strip()
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.error(f"[Supervisor] JSON parse error: {raw}")
-            return {"agreement": False, "status": "debating", "final_answer": {}}
+Structured ToM state (observable facts — no answer information):
+{json.dumps(filtered_common, ensure_ascii=False, indent=2)}
 
-    def _call_supervisor_correction(self, state: ToMState) -> str:
-        state_dict = asdict(state)
-        user_content = f"""
-Agents failed to reach consensus after {self.max_rounds} debate rounds.
-
-Scenario:
-{state_dict.get('scenario', '')}
-
-Questions:
-{json.dumps(state_dict.get('questions', []), ensure_ascii=False, indent=2)}
-
-Agent outputs:
-{json.dumps(state_dict.get('agent_outputs', {}), ensure_ascii=False, indent=2)}
-
-Analyze why the agents disagree and provide correction guidance.
+INSTRUCTIONS:
+- agent_outputs.belief_state is each agent's own interpreted belief, not ground truth.
+  Evaluate only whether it is logically derivable from events[].observed_by.
+  Do NOT confirm or infer the correct answer.
+- Use flags to identify which agents ignored critiques and which accepted them.
+- Identify whose reasoning is logically consistent with the observable evidence.
+- Provide correction guidance to help agents reach consensus through better reasoning.
 """
         correction = call_llm(
             client=self.client,
@@ -231,21 +176,3 @@ Analyze why the agents disagree and provide correction guidance.
         logger.info(f"[Supervisor] Correction generated: {correction[:100]}...")
         return correction
 
-    def _extract_final_answer(self, supervisor_result: dict, state: ToMState = None) -> ToMAnswers:
-        ans_map = _parse_final_answer(supervisor_result.get("final_answer"))
-
-        if not ans_map.get("q1") and state is not None:
-            for output in (asdict(state).get("agent_outputs") or {}).values():
-                if not output:
-                    continue
-                tom_ans = output.get("tom_answers")
-                q1_val = _extract_choice_letter(get_answer_value(tom_ans, "q1"))
-                if q1_val:
-                    if isinstance(tom_ans, list):
-                        for a in tom_ans:
-                            qid = a.get("id")
-                            if qid and not ans_map.get(qid):
-                                ans_map[qid] = _extract_choice_letter(a.get("value", ""))
-                    break
-
-        return ToMAnswers(answers=[{"id": k, "value": v} for k, v in ans_map.items() if v])
