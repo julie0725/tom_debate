@@ -24,19 +24,6 @@ def _extract_choice_letter(text: str) -> str:
     return m.group(1) if m else text.strip()
 
 
-def _parse_final_answer(fa) -> dict:
-    """Convert supervisor final_answer (list or legacy dict) to {q_id: value} map."""
-    if isinstance(fa, list):
-        return {a.get("id"): (a.get("value") or "") for a in fa if a.get("id")}
-    if isinstance(fa, dict):
-        result = {}
-        for k, v in fa.items():
-            if v:
-                qid = k.replace("_belief", "").replace("_desire", "").replace("_action", "")
-                result[qid] = v
-        return result
-    return {}
-
 
 class DebateManager:
     def __init__(
@@ -56,6 +43,7 @@ class DebateManager:
         self.max_tokens = max_tokens
         self._critique_prompt = self._load_prompt("debate_critique_prompt.txt")
         self._rebuttal_prompt = self._load_prompt("debate_rebuttal_prompt.txt")
+        self.accumulated_flags: list = []
 
     def _load_prompt(self, filename: str) -> str:
         p = Path(__file__).parent.parent / "prompts" / filename
@@ -66,10 +54,11 @@ class DebateManager:
     async def run_debate(
         self,
         pool: MessagePool,
-        supervisor_call_fn,
         supervisor_correction_fn=None,
         run_logger=None,
     ) -> ToMAnswers:
+
+        self.accumulated_flags = []
 
         for round_num in range(1, self.max_rounds + 1):
             logger.info(f"[Debate] Round {round_num} / {self.max_rounds}")
@@ -83,11 +72,12 @@ class DebateManager:
 
             rebuttal_results = await self._run_rebuttal_phase(pool, round_num, critiques, run_logger)
             self._print_rebuttal_phase(round_num, rebuttal_results)
+            self._accumulate_flags(critiques, rebuttal_results, outputs_before, round_num)
 
             state = pool.get_state()
-            result = supervisor_call_fn(state, debate_round=round_num)
-            self._print_round_result(round_num, result)
-            logger.info(f"[Debate] Round {round_num} agreement={result.get('agreement')}")
+            agreement, answer_map = self._check_agreement(state)
+            self._print_round_result(round_num, {"agreement": agreement, "answer_map": answer_map})
+            logger.info(f"[Debate] Round {round_num} agreement={agreement}")
 
             if run_logger:
                 run_logger.log_debate_round(
@@ -95,20 +85,20 @@ class DebateManager:
                     debate_context=state.debate_context,
                     agent_outputs_before=outputs_before,
                     agent_outputs_after=dict(state.agent_outputs),
-                    supervisor_result=result,
+                    supervisor_result={"agreement": agreement, "answer_map": answer_map},
                 )
                 run_logger.log_agent_outputs(state.agent_outputs, label=f"debate_round_{round_num:02d}")
                 run_logger.log_context_file(asdict(state), label=f"debate_round_{round_num:02d}")
 
-            if result.get("agreement"):
+            if agreement:
                 logger.info(f"[Debate] Consensus reached at round {round_num}")
-                return self._extract_answer(result, state)
+                return self._extract_answer_from_state(state)
 
         logger.info("[Debate] Max rounds reached. Supervisor analyzing errors...")
 
         if supervisor_correction_fn:
             state = pool.get_state()
-            correction = supervisor_correction_fn(state)
+            correction = supervisor_correction_fn(state, self.accumulated_flags)
             pool.update_supervisor_correction(correction)
 
             if run_logger:
@@ -120,15 +110,15 @@ class DebateManager:
             await self._re_reason_fresh(pool)
 
             state = pool.get_state()
-            final_result = supervisor_call_fn(state, debate_round=self.max_rounds + 1)
+            agreement, answer_map = self._check_agreement(state)
 
             if run_logger:
                 run_logger.log_agent_outputs(state.agent_outputs, label="fresh_reInfer")
                 run_logger.log_context_file(asdict(state), label="after_correction_reInfer")
 
-            if final_result.get("agreement"):
+            if agreement:
                 logger.info("[Debate] Consensus reached after correction.")
-                return self._extract_answer(final_result, state)
+                return self._extract_answer_from_state(state)
 
         logger.info("[Debate] Applying majority vote.")
         state = pool.get_state()
@@ -302,10 +292,9 @@ class DebateManager:
         print(f"[Round {round_num}] RESULT")
         print(f"{'=' * W}")
         print(f"Agreement: {result.get('agreement', '?')}")
-        reasoning = str(result.get("supervisor_reasoning", ""))
-        if reasoning:
-            trail = "..." if len(reasoning) > 200 else ""
-            print(f"Supervisor reasoning: \"{reasoning[:200]}{trail}\"")
+        if result.get("answer_map"):
+            for qid, votes in result["answer_map"].items():
+                print(f"  {qid}: {votes}")
 
     # ── Fresh re-reason (after correction) ───────────────────────────────────
 
@@ -363,23 +352,72 @@ class DebateManager:
         logger.info(f"[Debate] Majority vote result: {result}")
         return result
 
-    # ── Answer extraction ─────────────────────────────────────────────────────
+    # ── Flag accumulation ────────────────────────────────────────────────────
 
-    def _extract_answer(self, supervisor_result: dict, state: ToMState = None) -> ToMAnswers:
-        ans_map = _parse_final_answer(supervisor_result.get("final_answer"))
+    def _accumulate_flags(
+        self,
+        critiques: dict,
+        rebuttal_results: list,
+        outputs_before: dict,
+        round_num: int,
+    ) -> None:
+        """Record whether each agent accepted or ignored directed critiques."""
+        for agent_id, rebuttal_out in rebuttal_results:
+            agent_key = f"agent{agent_id}"
+            new_answer = _extract_choice_letter(rebuttal_out.get("my_answer", ""))
 
-        if not ans_map.get("q1") and state is not None:
-            for output in (asdict(state).get("agent_outputs") or {}).values():
-                if not output:
+            old_tom = (outputs_before.get(agent_key) or {}).get("tom_answers") or []
+            old_answer = next(
+                (_extract_choice_letter(a.get("value", "")) for a in old_tom if a.get("id") == "q1"),
+                "",
+            )
+
+            for critic_key, critique_out in critiques.items():
+                if critic_key == agent_key:
                     continue
-                tom_ans = output.get("tom_answers")
-                q1_val = _extract_choice_letter(get_answer_value(tom_ans, "q1"))
-                if q1_val:
-                    if isinstance(tom_ans, list):
-                        for a in tom_ans:
-                            qid = a.get("id")
-                            if qid and not ans_map.get(qid):
-                                ans_map[qid] = _extract_choice_letter(a.get("value", ""))
-                    break
+                critique_text = critique_out.get(f"critique_of_{agent_key}", "")
+                if not critique_text:
+                    continue
+                changed = bool(new_answer) and (new_answer != old_answer)
+                self.accumulated_flags.append({
+                    "round": round_num,
+                    "critic": critic_key,
+                    "target": agent_key,
+                    "flag": "accepted_critique" if changed else "ignored_critique",
+                    "old_answer": old_answer,
+                    "new_answer": new_answer,
+                })
 
-        return ToMAnswers(answers=[{"id": k, "value": v} for k, v in ans_map.items() if v])
+    # ── Agreement check (Python, no LLM) ─────────────────────────────────────
+
+    def _check_agreement(self, state: ToMState) -> tuple:
+        """Rule-based consensus check — no LLM call."""
+        answer_map = {}
+        for agent_key, output in state.agent_outputs.items():
+            if not output:
+                continue
+            for a in (output.get("tom_answers") or []):
+                qid = a.get("id")
+                val = _extract_choice_letter(a.get("value", ""))
+                if qid and val:
+                    answer_map.setdefault(qid, {})[agent_key] = val
+
+        agreement = bool(answer_map) and all(
+            len(set(votes.values())) == 1
+            for votes in answer_map.values()
+            if votes
+        )
+        return agreement, answer_map
+
+    def _extract_answer_from_state(self, state: ToMState) -> ToMAnswers:
+        """Extract final answer directly from agent outputs (used when agreement=True)."""
+        for output in state.agent_outputs.values():
+            if not output:
+                continue
+            tom_ans = output.get("tom_answers") or []
+            if tom_ans:
+                return ToMAnswers(answers=[
+                    {"id": a["id"], "value": _extract_choice_letter(a["value"])}
+                    for a in tom_ans if a.get("id") and a.get("value")
+                ])
+        return ToMAnswers()
