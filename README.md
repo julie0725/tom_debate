@@ -251,12 +251,12 @@ Joint accuracy      — ground_truth에 있는 질문 모두 정답 시
 
 | 조건 | Semantic | Ego | Observer | Debate |
 |---|---|---|---|---|
-| full_system | ✅ | ✅ | ✅ | ✅ |
-| no_debate | ✅ | ✅ | ✅ | ❌ |
-| agent1_only | ✅ | ❌ | ❌ | ❌ |
-| agent2_only | ❌ | ✅ | ❌ | ❌ |
-| agent3_only | ❌ | ❌ | ✅ | ❌ |
-| no_agent3 | ✅ | ✅ | ❌ | ✅ |
+| full_system | O | O | O | O |
+| no_debate | O | O | O | X |
+| agent1_only | O | X | X | X |
+| agent2_only | X | O | X | X |
+| agent3_only | X | X | O | X |
+| no_agent3 | O | O | X | O |
 
 결과: `outputs/ablation/<조건명>/`, 비교: `outputs/ablation/ablation_comparison.json`
 
