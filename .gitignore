@@ -12,3 +12,9 @@ data/bigtom/*
 # data/hitom 폴더도 동일하게 설정
 data/hitom/*
 !data/hitom/.gitkeep
+
+# Ablation 실험용 데이터
+!data/bigtom/bigtom.csv
+!data/bigtom/bigtom_raw.csv
+!data/hitom/Hi-ToM_data.json
+!data/hitom/Hi-ToM_data_raw.json
