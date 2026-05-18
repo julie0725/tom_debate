@@ -17,21 +17,29 @@ class Agent3Perspective(BaseAgent):
     def __init__(self, model: str = "gpt-3.5-turbo", max_tokens: int = 2000, provider: str = "openai", base_url: str = None):
         super().__init__(agent_id=3, model=model, max_tokens=max_tokens, provider=provider, base_url=base_url)
 
-    def reason(self, state_dict: dict, debate_context: dict = None) -> dict:
+    def reason(self, state_dict: dict) -> dict:
         user_prompt = self._build_user_prompt(state_dict)
         raw = self._call_llm(user_prompt)
         parsed = self._parse_json_response(raw)
 
+        tom_answers = self._build_tom_answers(parsed, state_dict)
+
+        update_log = {
+            str(step.get("step", i)): {
+                "agent": step.get("agent", ""),
+                "derived_belief": step.get("derived_belief", ""),
+                "witnessed_events": step.get("witnessed_events", []),
+                "input_to_next": step.get("input_to_next", ""),
+            }
+            for i, step in enumerate(parsed.get("simulation_chain") or [])
+        }
+
         return {
             "agent_id": 3,
-            "character_goal": parsed.get("character_goal", ""),
+            "character_goal": "",
             "truth_judgment": None,
-            "update_log": parsed.get("update_log", []),
-            "belief_state": parsed.get("belief_state", ""),
-            "reasoning": parsed.get("reasoning", ""),
-            "tom_answers": {
-                "q1_belief": parsed.get("tom_answers", {}).get("q1_belief", ""),
-                "q2_desire": parsed.get("tom_answers", {}).get("q2_desire", ""),
-                "q3_action": parsed.get("tom_answers", {}).get("q3_action", "")
-            }
+            "update_log": update_log,
+            "belief_state": parsed.get("internal_layers", {}),
+            "reasoning": parsed.get("mode", ""),
+            "tom_answers": tom_answers,
         }

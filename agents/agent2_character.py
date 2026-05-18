@@ -17,21 +17,38 @@ class Agent2Character(BaseAgent):
     def __init__(self, model: str = "gpt-3.5-turbo", max_tokens: int = 2000, provider: str = "openai", base_url: str = None):
         super().__init__(agent_id=2, model=model, max_tokens=max_tokens, provider=provider, base_url=base_url)
 
-    def reason(self, state_dict: dict, debate_context: dict = None) -> dict:
+    def reason(self, state_dict: dict) -> dict:
         user_prompt = self._build_user_prompt(state_dict)
         raw = self._call_llm(user_prompt)
         parsed = self._parse_json_response(raw)
 
+        answer_block = parsed.get("answer", {})
+        tom_answers = self._build_tom_answers(parsed, state_dict)
+
+        raw_log = parsed.get("belief_update_log", parsed.get("update_log", []))
+        update_log = {}
+        if isinstance(raw_log, list):
+            for ev in raw_log:
+                idx = str(ev.get("idx", "?"))
+                character_updates = {}
+                for upd in ev.get("updates", []):
+                    prop = upd.get("proposition", "unknown")
+                    character_updates[prop] = {
+                        "belief_state": f"{upd.get('before', '?')} → {upd.get('after', '?')}",
+                        "confidence": upd.get("confidence", ""),
+                        "rationale": upd.get("rationale", ""),
+                    }
+                update_log[idx] = {"character": character_updates}
+        elif isinstance(raw_log, dict):
+            update_log = raw_log
+
         return {
             "agent_id": 2,
-            "character_goal": parsed.get("character_goal", ""),
+            "character_goal": parsed.get("character_goal", parsed.get("character", "")),
             "truth_judgment": None,
-            "update_log": parsed.get("update_log", []),
-            "belief_state": parsed.get("belief_state", ""),
-            "reasoning": parsed.get("reasoning", ""),
-            "tom_answers": {
-                "q1_belief": parsed.get("tom_answers", {}).get("q1_belief", ""),
-                "q2_desire": parsed.get("tom_answers", {}).get("q2_desire", ""),
-                "q3_action": parsed.get("tom_answers", {}).get("q3_action", "")
-            }
+            "update_log": update_log,
+            "belief_state": parsed.get("final_belief_state", []),
+            "tom_answer": answer_block.get("response", ""),
+            "reasoning": answer_block.get("rationale", ""),
+            "tom_answers": tom_answers,
         }

@@ -1,186 +1,423 @@
 """
 debate.py
----------
-Debate Loop 관리
-- 라운드별 Agent 재추론 (MessagePool 통해 debate_context 공유 - 직접 전달 금지)
-- 만장일치 체크
-- max_rounds 초과 시: 감독관 오류 분석 → context file 수정 → 처음부터 재추론 → (불일치 시) 다수결
 """
-
 import asyncio
+import copy
+import json
 import logging
+import re
 from collections import Counter
 from dataclasses import asdict
+from pathlib import Path
 
-from core.context_file import ToMState, ToMAnswers
+from core.context_file import ToMState, ToMAnswers, get_answer_value
 from core.message_pool import MessagePool
+from core.llm_client import call_llm
 
 logger = logging.getLogger(__name__)
 
 
+def _extract_choice_letter(text: str) -> str:
+    if not text:
+        return ""
+    m = re.match(r'^([A-Z])(?:\.|\s|$)', text.strip())
+    return m.group(1) if m else text.strip()
+
+
+
 class DebateManager:
-    def __init__(self, agents: dict, max_rounds: int, tiebreak_agent: int = 3):
+    def __init__(
+        self,
+        agents: dict,
+        max_rounds: int,
+        tiebreak_agent: int = 3,
+        client=None,
+        model: str = "gpt-3.5-turbo",
+        max_tokens: int = 2000,
+    ):
         self.agents = agents
         self.max_rounds = max_rounds
-        self.tiebreak_agent = tiebreak_agent  # 동점 시 우선 Agent (기본: Agent 3)
+        self.tiebreak_agent = tiebreak_agent
+        self.client = client
+        self.model = model
+        self.max_tokens = max_tokens
+        self._critique_prompt = self._load_prompt("debate_critique_prompt.txt")
+        self._rebuttal_prompt = self._load_prompt("debate_rebuttal_prompt.txt")
+        self.accumulated_flags: list = []
+
+    def _load_prompt(self, filename: str) -> str:
+        p = Path(__file__).parent.parent / "prompts" / filename
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    # ── Main debate loop ──────────────────────────────────────────────────────
 
     async def run_debate(
         self,
         pool: MessagePool,
-        supervisor_call_fn,
-        supervisor_correction_fn=None
+        supervisor_correction_fn=None,
+        run_logger=None,
     ) -> ToMAnswers:
-        """
-        토론 루프 실행
-        - 각 라운드: MessagePool에 debate_context 저장 → 재추론 → 감독관 재판단
-        - 만장일치 → 종료
-        - max_rounds 초과 → 감독관 오류 분석 → context file 수정 → 처음부터 재추론
-          - 재추론 후 일치 → 종료
-          - 재추론 후 불일치 → 다수결 (최후 수단)
-        """
+
+        self.accumulated_flags = []
+
         for round_num in range(1, self.max_rounds + 1):
             logger.info(f"[Debate] Round {round_num} / {self.max_rounds}")
             pool.update_debate_round(round_num)
 
-            # MessagePool에 debate_context 저장 후 재추론
-            await self._re_reason_all(pool)
-
-            # 감독관 재판단
             state = pool.get_state()
-            result = supervisor_call_fn(state, debate_round=round_num)
-            logger.info(f"[Debate] Round {round_num} agreement={result.get('agreement')}")
+            outputs_before = copy.deepcopy(state.agent_outputs)
 
-            if result.get("agreement"):
+            critiques = await self._run_critique_phase(pool, round_num, run_logger)
+            self._print_critique_phase(round_num, critiques)
+
+            rebuttal_results = await self._run_rebuttal_phase(pool, round_num, critiques, run_logger)
+            self._print_rebuttal_phase(round_num, rebuttal_results)
+            self._accumulate_flags(critiques, rebuttal_results, outputs_before, round_num)
+
+            state = pool.get_state()
+            agreement, answer_map = self._check_agreement(state)
+            self._print_round_result(round_num, {"agreement": agreement, "answer_map": answer_map})
+            logger.info(f"[Debate] Round {round_num} agreement={agreement}")
+
+            if run_logger:
+                run_logger.log_debate_round(
+                    round_num=round_num,
+                    debate_context=state.debate_context,
+                    agent_outputs_before=outputs_before,
+                    agent_outputs_after=dict(state.agent_outputs),
+                    supervisor_result={"agreement": agreement, "answer_map": answer_map},
+                )
+                run_logger.log_agent_outputs(state.agent_outputs, label=f"debate_round_{round_num:02d}")
+                run_logger.log_context_file(asdict(state), label=f"debate_round_{round_num:02d}")
+
+            if agreement:
                 logger.info(f"[Debate] Consensus reached at round {round_num}")
-                return self._extract_answer(result)
+                return self._extract_answer_from_state(state)
 
-        # max_rounds 초과 → 감독관 오류 분석 및 context file 수정
         logger.info("[Debate] Max rounds reached. Supervisor analyzing errors...")
 
         if supervisor_correction_fn:
             state = pool.get_state()
-            correction = supervisor_correction_fn(state)
+            correction = supervisor_correction_fn(state, self.accumulated_flags)
             pool.update_supervisor_correction(correction)
 
-            # debate_context 초기화 (처음부터 재추론이므로 이전 토론 컨텍스트 제거)
-            pool.update_debate_context({})
-            logger.info("[Debate] Context file corrected. Re-reasoning from scratch...")
+            if run_logger:
+                run_logger.log_supervisor_correction(correction)
 
-            # 처음부터 재추론 (supervisor_correction이 state_dict에 반영된 상태)
+            pool.update_debate_context({})
+            logger.info("[Debate] Re-reasoning from scratch...")
+
             await self._re_reason_fresh(pool)
 
-            # 최종 판단
             state = pool.get_state()
-            final_result = supervisor_call_fn(state, debate_round=self.max_rounds + 1)
+            agreement, answer_map = self._check_agreement(state)
 
-            if final_result.get("agreement"):
-                logger.info("[Debate] Consensus reached after supervisor correction.")
-                return self._extract_answer(final_result)
+            if run_logger:
+                run_logger.log_agent_outputs(state.agent_outputs, label="fresh_reInfer")
+                run_logger.log_context_file(asdict(state), label="after_correction_reInfer")
 
-        # 최후 수단: 다수결
-        logger.info("[Debate] Applying majority vote as last resort.")
+            if agreement:
+                logger.info("[Debate] Consensus reached after correction.")
+                return self._extract_answer_from_state(state)
+
+        logger.info("[Debate] Applying majority vote.")
         state = pool.get_state()
         state.majority_vote_applied = True
         return self._majority_vote(state)
 
-    async def _re_reason_all(self, pool: MessagePool) -> None:
-        """
-        토론 라운드 재추론
-        - 각 에이전트별 debate_context(다른 에이전트 출력)를 MessagePool에 저장
-        - 에이전트는 pool.get_state() → state_dict를 통해 debate_context 읽음
-        - 직접 에이전트간 전달 없음
-        """
-        state = pool.get_state()
+    # ── Phase 1: Critique ─────────────────────────────────────────────────────
 
-        # 에이전트별 debate_context 빌드 후 MessagePool 업데이트
-        debate_context = {"round": state.debate_round}
-        for agent_id in self.agents:
-            other_outputs = {
-                aid: out
-                for aid, out in state.agent_outputs.items()
-                if aid != f"agent{agent_id}" and out is not None
-            }
-            debate_context[f"agent{agent_id}"] = {"other_outputs": other_outputs}
-
-        pool.update_debate_context(debate_context)
-
-        # 업데이트된 state_dict로 병렬 재추론
+    async def _run_critique_phase(
+        self, pool: MessagePool, round_num: int, run_logger=None
+    ) -> dict:
+        """Each agent critiques the other two, citing specific timeline events."""
         state = pool.get_state()
         state_dict = asdict(state)
+        agent_ids = list(self.agents.keys())
 
-        async def re_reason_agent(agent_id, agent):
-            loop = asyncio.get_event_loop()
-            output = await loop.run_in_executor(None, agent.reason, state_dict, None)
-            logger.info(f"[Debate] Agent{agent_id} re-reasoned via MessagePool")
-            return agent_id, output
+        async def critique_one(agent_id: int) -> tuple[int, dict]:
+            agent_key = f"agent{agent_id}"
+            user_content = (
+                f"You are agent{agent_id}.\n\n"
+                f"Scenario:\n{state_dict['scenario']}\n\n"
+                f"Questions:\n{json.dumps(state_dict['questions'], ensure_ascii=False)}\n\n"
+                f"All agents' current outputs:\n"
+                f"{json.dumps(state_dict['agent_outputs'], ensure_ascii=False, indent=2)}\n\n"
+                f"Critique the reasoning of every agent EXCEPT yourself. "
+                f"Cite specific event numbers as evidence. "
+                f"Set critique_of_{agent_key} to empty string."
+            )
+            raw = await asyncio.get_event_loop().run_in_executor(
+                None, call_llm,
+                self.client, self.model, self._critique_prompt, user_content, self.max_tokens,
+            )
+            cleaned = re.sub(r"```json|```", "", raw).strip()
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                logger.warning(f"[Debate] Critique JSON parse error (agent{agent_id}): {raw[:120]}")
+                parsed = {f"critique_of_agent{aid}": "" for aid in agent_ids}
+                parsed["my_answer"] = ""
+            parsed[f"critique_of_{agent_key}"] = ""   # enforce own field empty
+            parsed["agent_id"] = agent_id
+            return agent_id, parsed
 
-        tasks = [re_reason_agent(aid, agent) for aid, agent in self.agents.items()]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*[critique_one(aid) for aid in agent_ids])
+        critiques = {f"agent{aid}": out for aid, out in results}
 
-        for agent_id, output in results:
-            pool.update_agent_output(agent_id, output)
+        context = {
+            "round": round_num,
+            "phase": "critique",
+            **{f"agent{aid}_critique": out for aid, out in results},
+        }
+        pool.update_debate_context(context)
+
+        if run_logger:
+            run_logger.log_context_file(asdict(pool.get_state()), label=f"critique_round_{round_num:02d}")
+
+        logger.info(f"[Debate] Critique phase done (round {round_num})")
+        return critiques
+
+    # ── Phase 2: Rebuttal ─────────────────────────────────────────────────────
+
+    async def _run_rebuttal_phase(
+        self, pool: MessagePool, round_num: int, critiques: dict, run_logger=None
+    ) -> None:
+        """Each agent rebuts critiques directed at it and updates its answer."""
+        state = pool.get_state()
+        state_dict = asdict(state)
+        agent_ids = list(self.agents.keys())
+
+        async def rebuttal_one(agent_id: int) -> tuple[int, dict]:
+            agent_key = f"agent{agent_id}"
+            incoming = {
+                critic_key: c_out.get(f"critique_of_{agent_key}", "")
+                for critic_key, c_out in critiques.items()
+                if critic_key != agent_key
+                and c_out.get(f"critique_of_{agent_key}")
+            }
+            user_content = (
+                f"You are agent{agent_id}.\n\n"
+                f"Scenario:\n{state_dict['scenario']}\n\n"
+                f"Questions:\n{json.dumps(state_dict['questions'], ensure_ascii=False)}\n\n"
+                f"Your current output:\n"
+                f"{json.dumps(state_dict['agent_outputs'].get(agent_key, {}), ensure_ascii=False, indent=2)}\n\n"
+                f"Critiques directed at you:\n"
+                f"{json.dumps(incoming, ensure_ascii=False, indent=2)}"
+            )
+            raw = await asyncio.get_event_loop().run_in_executor(
+                None, call_llm,
+                self.client, self.model, self._rebuttal_prompt, user_content, self.max_tokens,
+            )
+            cleaned = re.sub(r"```json|```", "", raw).strip()
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                logger.warning(f"[Debate] Rebuttal JSON parse error (agent{agent_id}): {raw[:120]}")
+                parsed = {"rebuttal": raw[:300], "my_answer": ""}
+            parsed["agent_id"] = agent_id
+            return agent_id, parsed
+
+        results = await asyncio.gather(*[rebuttal_one(aid) for aid in agent_ids])
+
+        # Merge revised my_answer back into each agent's tom_answers (q1)
+        for agent_id, rebuttal_out in results:
+            agent_key = f"agent{agent_id}"
+            new_letter = _extract_choice_letter(rebuttal_out.get("my_answer", ""))
+            if new_letter:
+                current = dict(state.agent_outputs.get(agent_key) or {})
+                tom = list(current.get("tom_answers") or [])
+                updated = False
+                for entry in tom:
+                    if entry.get("id") == "q1":
+                        entry["value"] = new_letter
+                        updated = True
+                        break
+                if not updated:
+                    tom = [{"id": "q1", "value": new_letter}] + tom
+                pool.update_agent_output(agent_id, {**current, "tom_answers": tom})
+
+        # Combined context carries both phases so the logger can render the full transcript
+        context = {
+            "round": round_num,
+            "phase": "combined",
+            **{f"{k}_critique": v for k, v in critiques.items()},
+            **{f"agent{aid}_rebuttal": out for aid, out in results},
+        }
+        pool.update_debate_context(context)
+
+        if run_logger:
+            run_logger.log_context_file(asdict(pool.get_state()), label=f"rebuttal_round_{round_num:02d}")
+
+        logger.info(f"[Debate] Rebuttal phase done (round {round_num})")
+        return results
+
+    # ── Console transcript printers ───────────────────────────────────────────
+
+    @staticmethod
+    def _print_critique_phase(round_num: int, critiques: dict) -> None:
+        W = 40
+        print(f"\n{'=' * W}")
+        print(f"[Round {round_num}] CRITIQUE PHASE")
+        print(f"{'=' * W}")
+        for src_key in ["agent1", "agent2", "agent3"]:
+            c_out = critiques.get(src_key, {})
+            for tgt_key in ["agent1", "agent2", "agent3"]:
+                if tgt_key == src_key:
+                    continue
+                crit_text = str(c_out.get(f"critique_of_{tgt_key}", ""))
+                if crit_text:
+                    trail = "..." if len(crit_text) > 150 else ""
+                    src = src_key.replace("agent", "Agent")
+                    tgt = tgt_key.replace("agent", "Agent")
+                    print(f"{src} → {tgt}: \"{crit_text[:150]}{trail}\"")
+
+    @staticmethod
+    def _print_rebuttal_phase(round_num: int, rebuttal_results) -> None:
+        W = 40
+        print(f"\n{'=' * W}")
+        print(f"[Round {round_num}] REBUTTAL PHASE")
+        print(f"{'=' * W}")
+        for agent_id, r_out in sorted(rebuttal_results, key=lambda x: x[0]):
+            rebuttal_text = str(r_out.get("rebuttal", ""))
+            answer = r_out.get("my_answer", "?")
+            trail = "..." if len(rebuttal_text) > 150 else ""
+            print(f"Agent{agent_id} rebuttal: \"{rebuttal_text[:150]}{trail}\"")
+            print(f"  → answer: {answer}")
+
+    @staticmethod
+    def _print_round_result(round_num: int, result: dict) -> None:
+        W = 40
+        print(f"\n{'=' * W}")
+        print(f"[Round {round_num}] RESULT")
+        print(f"{'=' * W}")
+        print(f"Agreement: {result.get('agreement', '?')}")
+        if result.get("answer_map"):
+            for qid, votes in result["answer_map"].items():
+                print(f"  {qid}: {votes}")
+
+    # ── Fresh re-reason (after correction) ───────────────────────────────────
 
     async def _re_reason_fresh(self, pool: MessagePool) -> None:
-        """
-        감독관 수정 후 처음부터 재추론
-        - debate_context 없이 supervisor_correction만 반영
-        - 에이전트는 state_dict의 supervisor_correction을 읽어 재추론
-        """
         state = pool.get_state()
         state_dict = asdict(state)
 
         async def re_reason_agent(agent_id, agent):
             loop = asyncio.get_event_loop()
-            output = await loop.run_in_executor(None, agent.reason, state_dict, None)
-            logger.info(f"[Debate] Agent{agent_id} re-reasoned fresh after correction")
+            output = await loop.run_in_executor(None, agent.reason, state_dict)
             return agent_id, output
 
-        tasks = [re_reason_agent(aid, agent) for aid, agent in self.agents.items()]
-        results = await asyncio.gather(*tasks)
-
+        results = await asyncio.gather(*[re_reason_agent(aid, ag) for aid, ag in self.agents.items()])
         for agent_id, output in results:
             pool.update_agent_output(agent_id, output)
 
+    # ── Majority vote ─────────────────────────────────────────────────────────
+
     def _majority_vote(self, state: ToMState) -> ToMAnswers:
-        """
-        3개 질문 각각에 대해 다수결
-        동점 시 tiebreak_agent(기본: Agent 3) 답변 채택
-        """
         outputs = [
             state.agent_outputs.get(f"agent{i}")
             for i in [1, 2, 3]
             if state.agent_outputs.get(f"agent{i}") is not None
         ]
 
-        def vote_for_question(q_key: str) -> str:
-            answers = []
-            for out in outputs:
-                if out and out.get("tom_answers"):
-                    answers.append(out["tom_answers"].get(q_key, ""))
-            if not answers:
+        q_ids: list[str] = []
+        for out in outputs:
+            if out:
+                for a in (out.get("tom_answers") or []):
+                    qid = a.get("id")
+                    if qid and qid not in q_ids:
+                        q_ids.append(qid)
+        if not q_ids:
+            q_ids = ["q1"]
+
+        def vote_for(q_id: str) -> str:
+            votes = [
+                _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
+                for out in outputs
+                if out and out.get("tom_answers") is not None
+            ]
+            if not votes:
                 return ""
-            counter = Counter(answers)
+            counter = Counter(votes)
             top = counter.most_common()
             if len(top) == 1 or top[0][1] > top[1][1]:
                 return top[0][0]
-            # 동점 → tiebreak_agent 답변 채택
-            tiebreak_out = state.agent_outputs.get(f"agent{self.tiebreak_agent}")
-            if tiebreak_out and tiebreak_out.get("tom_answers"):
-                return tiebreak_out["tom_answers"].get(q_key, top[0][0])
+            tiebreak = state.agent_outputs.get(f"agent{self.tiebreak_agent}")
+            if tiebreak:
+                tb_val = get_answer_value(tiebreak.get("tom_answers"), q_id)
+                return _extract_choice_letter(tb_val) or top[0][0]
             return top[0][0]
 
-        result = ToMAnswers(
-            q1_belief=vote_for_question("q1_belief"),
-            q2_desire=vote_for_question("q2_desire"),
-            q3_action=vote_for_question("q3_action")
-        )
+        result = ToMAnswers(answers=[{"id": qid, "value": vote_for(qid)} for qid in q_ids])
         logger.info(f"[Debate] Majority vote result: {result}")
         return result
 
-    def _extract_answer(self, supervisor_result: dict) -> ToMAnswers:
-        fa = supervisor_result.get("final_answer", {})
-        return ToMAnswers(
-            q1_belief=fa.get("q1_belief"),
-            q2_desire=fa.get("q2_desire"),
-            q3_action=fa.get("q3_action")
+    # ── Flag accumulation ────────────────────────────────────────────────────
+
+    def _accumulate_flags(
+        self,
+        critiques: dict,
+        rebuttal_results: list,
+        outputs_before: dict,
+        round_num: int,
+    ) -> None:
+        """Record whether each agent accepted or ignored directed critiques."""
+        for agent_id, rebuttal_out in rebuttal_results:
+            agent_key = f"agent{agent_id}"
+            new_answer = _extract_choice_letter(rebuttal_out.get("my_answer", ""))
+
+            old_tom = (outputs_before.get(agent_key) or {}).get("tom_answers") or []
+            old_answer = next(
+                (_extract_choice_letter(a.get("value", "")) for a in old_tom if a.get("id") == "q1"),
+                "",
+            )
+
+            for critic_key, critique_out in critiques.items():
+                if critic_key == agent_key:
+                    continue
+                critique_text = critique_out.get(f"critique_of_{agent_key}", "")
+                if not critique_text:
+                    continue
+                changed = bool(new_answer) and (new_answer != old_answer)
+                self.accumulated_flags.append({
+                    "round": round_num,
+                    "critic": critic_key,
+                    "target": agent_key,
+                    "flag": "accepted_critique" if changed else "ignored_critique",
+                    "old_answer": old_answer,
+                    "new_answer": new_answer,
+                })
+
+    # ── Agreement check (Python, no LLM) ─────────────────────────────────────
+
+    def _check_agreement(self, state: ToMState) -> tuple:
+        """Rule-based consensus check — no LLM call."""
+        answer_map = {}
+        for agent_key, output in state.agent_outputs.items():
+            if not output:
+                continue
+            for a in (output.get("tom_answers") or []):
+                qid = a.get("id")
+                val = _extract_choice_letter(a.get("value", ""))
+                if qid and val:
+                    answer_map.setdefault(qid, {})[agent_key] = val
+
+        agreement = bool(answer_map) and all(
+            len(set(votes.values())) == 1
+            for votes in answer_map.values()
+            if votes
         )
+        return agreement, answer_map
+
+    def _extract_answer_from_state(self, state: ToMState) -> ToMAnswers:
+        """Extract final answer directly from agent outputs (used when agreement=True)."""
+        for output in state.agent_outputs.values():
+            if not output:
+                continue
+            tom_ans = output.get("tom_answers") or []
+            if tom_ans:
+                return ToMAnswers(answers=[
+                    {"id": a["id"], "value": _extract_choice_letter(a["value"])}
+                    for a in tom_ans if a.get("id") and a.get("value")
+                ])
+        return ToMAnswers()
