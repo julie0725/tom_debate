@@ -90,4 +90,11 @@ def call_llm(
             {"role": "user", "content": user_content}
         ]
     )
+    usage = response.usage
+    if usage:
+        logger.info(
+            f"[LLMClient] tokens — prompt: {usage.prompt_tokens}, "
+            f"completion: {usage.completion_tokens}/{max_tokens} "
+            f"({'NEAR LIMIT' if usage.completion_tokens >= max_tokens * 0.9 else 'ok'})"
+        )
     return response.choices[0].message.content
