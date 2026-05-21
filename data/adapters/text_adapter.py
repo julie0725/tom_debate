@@ -57,6 +57,7 @@ class TextAdapter(TextDatasetAdapter):
             system_prompt=_SYSTEM_PROMPT,
             user_content=self.text,
             max_tokens=sys_cfg.get("max_tokens", 2000),
+            temperature=sys_cfg.get("temperature", 0.0)
         )
         cleaned = re.sub(r"```json|```", "", raw).strip()
         try:

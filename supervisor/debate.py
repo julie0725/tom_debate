@@ -14,6 +14,7 @@ from core.context_file import ToMState, ToMAnswers, get_answer_value
 from core.message_pool import MessagePool
 from core.llm_client import call_llm
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +35,7 @@ class DebateManager:
         client=None,
         model: str = "gpt-3.5-turbo",
         max_tokens: int = 2000,
+        temperature: float = 0.0,
     ):
         self.agents = agents
         self.max_rounds = max_rounds
@@ -41,6 +43,7 @@ class DebateManager:
         self.client = client
         self.model = model
         self.max_tokens = max_tokens
+        self.temperature = temperature
         self._critique_prompt = self._load_prompt("debate_critique_prompt.txt")
         self._rebuttal_prompt = self._load_prompt("debate_rebuttal_prompt.txt")
         self.accumulated_flags: list = []
@@ -149,7 +152,7 @@ class DebateManager:
             )
             raw = await asyncio.get_event_loop().run_in_executor(
                 None, call_llm,
-                self.client, self.model, self._critique_prompt, user_content, self.max_tokens,
+                self.client, self.model, self._critique_prompt, user_content, self.max_tokens, self.temperature,
             )
             cleaned = re.sub(r"```json|```", "", raw).strip()
             try:
@@ -207,7 +210,7 @@ class DebateManager:
             )
             raw = await asyncio.get_event_loop().run_in_executor(
                 None, call_llm,
-                self.client, self.model, self._rebuttal_prompt, user_content, self.max_tokens,
+                self.client, self.model, self._rebuttal_prompt, user_content, self.max_tokens, self.temperature,
             )
             cleaned = re.sub(r"```json|```", "", raw).strip()
             try:
