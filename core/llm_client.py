@@ -66,7 +66,8 @@ def call_llm(
     model: str,
     system_prompt: str,
     user_content: str,
-    max_tokens: int = 2000
+    max_tokens: int = 2000,
+    temperature: float = 0
 ) -> str:
     """
     통일된 LLM 호출 함수
@@ -85,6 +86,7 @@ def call_llm(
     response = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
+        temperature = temperature,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content}

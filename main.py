@@ -108,6 +108,17 @@ def run_ablation(config: dict, dataset_path: str):
         return
     runner = AblationRunner(base_config=config, dataset=dataset)
     runner.run_all()
+def run_ablation(config: dict, dataset_path: str, limit: int = None):
+    """Ablation study 실행"""
+    temp_user = AIUser(config=config)
+    tasks = list(temp_user.proxy.get_tasks(dataset_path, limit=limit))
+    if limit:
+        tasks = tasks[:limit]
+    if not tasks:
+        logger.error("데이터셋 로드 실패")
+        return
+    runner = AblationRunner(base_config=config, dataset=tasks, conditions=conditions)
+    runner.run_all()
 
 
 def run_eval_only(config: dict):
@@ -123,6 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", default="config/config.yaml", help="설정 파일 경로")
     parser.add_argument("--dataset", default="data/hitom/Hi-ToM_data.json", help="데이터셋 경로")
     parser.add_argument("--limit", type=int, default=None, help="batch 모드에서 처리할 최대 샘플 수")
+    parser.add_argument("--conditions", default=None, help="실행할 조건 (쉼표로 구분, 예: full_system,no_supervisor,no_persona)")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -133,5 +145,7 @@ if __name__ == "__main__":
         run_batch(config, args.dataset, limit=args.limit)
     elif args.mode == "ablation":
         run_ablation(config, args.dataset)
+        conditions = args.conditions.split(",") if args.conditions else None
+        run_ablation(config, args.dataset, limit=args.limit, conditions=conditions)
     elif args.mode == "eval":
         run_eval_only(config)

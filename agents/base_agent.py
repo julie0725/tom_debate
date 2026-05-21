@@ -24,13 +24,15 @@ class BaseAgent(ABC):
         model: str = "gpt-3.5-turbo",
         max_tokens: int = 2000,
         provider: str = "openai",
-        base_url: str = None
+        base_url: str = None,
+        use_persona: bool = True
     ):
         self.agent_id = agent_id
         self.model = model
         self.max_tokens = max_tokens
         self.client = get_llm_client(provider=provider, base_url=base_url)
-        self.system_prompt = self._load_prompt()
+        # self.system_prompt = self._load_prompt()
+        self.system_prompt = self._load_prompt() if use_persona else ""
 
     def _load_prompt(self) -> str:
         prompt_path = Path(__file__).parent.parent / "prompts" / f"agent{self.agent_id}_prompt.txt"
