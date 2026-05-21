@@ -30,42 +30,19 @@ ABLATION_CONDITIONS = [
         }
     },
     {
-        "name": "no_debate",
-        "description": "No debate: all agents, no debate",
+        "name": "no_supervisor",
+        "description": "No supervisor correction: majority voting only",
         "overrides": {
             "agents": {"use_agent1": True, "use_agent2": True, "use_agent3": True},
-            "debate": {"use_debate": False}
+            "debate": {"use_debate": True, "use_supervisor_correction": False}
         }
     },
     {
-        "name": "agent1_only",
-        "description": "Single agent: agent1 only",
+        "name": "no_persona",
+        "description": "No agent personas: plain reasoning only",
         "overrides": {
-            "agents": {"use_agent1": True, "use_agent2": False, "use_agent3": False},
-            "debate": {"use_debate": False}
-        }
-    },
-    {
-        "name": "agent2_only",
-        "description": "Single agent: agent2 only",
-        "overrides": {
-            "agents": {"use_agent1": False, "use_agent2": True, "use_agent3": False},
-            "debate": {"use_debate": False}
-        }
-    },
-    {
-        "name": "agent3_only",
-        "description": "Single agent: agent3 only",
-        "overrides": {
-            "agents": {"use_agent1": False, "use_agent2": False, "use_agent3": True},
-            "debate": {"use_debate": False}
-        }
-    },
-    {
-        "name": "no_agent3",
-        "description": "No higher-order agent: agent1 + agent2 only",
-        "overrides": {
-            "agents": {"use_agent1": True, "use_agent2": True, "use_agent3": False},
+            "agents": {"use_agent1": True, "use_agent2": True, "use_agent3": True,
+                       "use_persona": False},
             "debate": {"use_debate": True}
         }
     }
@@ -82,12 +59,16 @@ class AblationRunner:
         self.dataset = dataset
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        if conditions:
+            self.conditions = [c for c in ABLATION_CONDITIONS if c["name"] in conditions]
+        else:
+            self.conditions = ABLATION_CONDITIONS
 
     def run_all(self) -> dict:
         """모든 ablation 조건 실행"""
         all_results = {}
 
-        for condition in ABLATION_CONDITIONS:
+        for condition in self.conditions:
             logger.info(f"\n[Ablation] Running: {condition['name']}")
             print(f"\n{'='*50}")
             print(f"  Condition: {condition['name']}")
@@ -107,20 +88,22 @@ class AblationRunner:
             ai_user = AIUser(config=cfg)
             evaluator = Evaluator(output_dir=str(condition_output_dir) + "/")
 
-            for sample in self.dataset:
-                gt = sample.get("ground_truth") or {}
-                task = ToMTask(
-                    context=sample.get("scenario", ""),
-                    question=sample.get("q1", ""),
-                    gold_answer=gt.get("q1_belief") or None,
-                    dataset_id=str(sample.get("id", "")),
-                    metadata={
-                        "q2": sample.get("q2", ""),
-                        "q3": sample.get("q3", ""),
-                        "gold_q2": gt.get("q2_desire"),
-                        "gold_q3": gt.get("q3_action"),
-                    },
-                )
+            for i, sample in enumerate(self.dataset):
+                # gt = sample.get("ground_truth") or {}
+                # task = ToMTask(
+                #     context=sample.get("scenario", ""),
+                #     question=sample.get("q1", ""),
+                #     gold_answer=gt.get("q1_belief") or None,
+                #     dataset_id=str(sample.get("id", "")),
+                #     metadata={
+                #         "q2": sample.get("q2", ""),
+                #         "q3": sample.get("q3", ""),
+                #         "gold_q2": gt.get("q2_desire"),
+                #         "gold_q3": gt.get("q3_action"),
+                #     },
+                # )
+                print(f"  [{i+1}/{len(self.dataset)}] 샘플 처리 중... (조건: {condition['name']})")
+                task = sample
                 try:
                     ai_user._submit(task)
                 except Exception as e:
@@ -149,11 +132,22 @@ class AblationRunner:
         print("-"*70)
         for name, data in all_results.items():
             s = data.get("summary", {})
+            # print(
+            #     f"  {name:<20} "
+            #     f"{s.get('q1_belief_accuracy', 0):>8.2%} "
+            #     f"{s.get('q2_desire_accuracy', 0):>8.2%} "
+            #     f"{s.get('q3_action_accuracy', 0):>8.2%} "
+            #     f"{s.get('joint_accuracy', 0):>8.2%}"
+            # )
+            q1 = s.get('q1_belief_accuracy')
+            q2 = s.get('q2_desire_accuracy')
+            q3 = s.get('q3_action_accuracy')
+            joint = s.get('joint_accuracy')
             print(
                 f"  {name:<20} "
-                f"{s.get('q1_belief_accuracy', 0):>8.2%} "
-                f"{s.get('q2_desire_accuracy', 0):>8.2%} "
-                f"{s.get('q3_action_accuracy', 0):>8.2%} "
-                f"{s.get('joint_accuracy', 0):>8.2%}"
+                f"{f'{q1:.2%}' if q1 is not None else 'N/A':>8} "
+                f"{f'{q2:.2%}' if q2 is not None else 'N/A':>8} "
+                f"{f'{q3:.2%}' if q3 is not None else 'N/A':>8} "
+                f"{f'{joint:.2%}' if joint is not None else 'N/A':>8}"
             )
         print("="*70 + "\n")

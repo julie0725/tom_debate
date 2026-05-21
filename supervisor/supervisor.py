@@ -33,23 +33,28 @@ class Supervisor:
         self.max_rounds = config.get("debate", {}).get("max_rounds", 3)
         self.use_debate = config.get("debate", {}).get("use_debate", True)
         self.tiebreak_agent = config.get("debate", {}).get("tiebreak_agent", 3)
+        self.use_supervisor_correction = config.get("debate", {}).get("use_supervisor_correction", True)
 
         agent_cfg = config.get("agents", {})
+        use_persona = agent_cfg.get("use_persona", True)
         self.agents = {}
         if agent_cfg.get("use_agent1", True):
             self.agents[1] = Agent1Context(
                 model=self.model, max_tokens=self.max_tokens,
-                provider=self.provider, base_url=self.base_url
+                provider=self.provider, base_url=self.base_url,
+                use_persona=use_persona
             )
         if agent_cfg.get("use_agent2", True):
             self.agents[2] = Agent2Character(
                 model=self.model, max_tokens=self.max_tokens,
-                provider=self.provider, base_url=self.base_url
+                provider=self.provider, base_url=self.base_url,
+                use_persona=use_persona
             )
         if agent_cfg.get("use_agent3", True):
             self.agents[3] = Agent3Perspective(
                 model=self.model, max_tokens=self.max_tokens,
-                provider=self.provider, base_url=self.base_url
+                provider=self.provider, base_url=self.base_url,
+                use_persona=use_persona
             )
 
         self.client = get_llm_client(provider=self.provider, base_url=self.base_url)
@@ -102,11 +107,18 @@ class Supervisor:
                 state.debate_triggered = True
                 self.pool.update_status("debating")
                 logger.info("[Supervisor] Disagreement detected. Starting debate.")
+                # final = await self.debate_manager.run_debate(
+                #     pool=self.pool,
+                #     supervisor_correction_fn=self._call_supervisor_correction,
+                #     run_logger=self.run_logger
+                #)
+                correction_fn = self._call_supervisor_correction if self.use_supervisor_correction else None
                 final = await self.debate_manager.run_debate(
                     pool=self.pool,
-                    supervisor_correction_fn=self._call_supervisor_correction,
+                    supervisor_correction_fn=correction_fn,
                     run_logger=self.run_logger
                 )
+
                 self.pool.set_final_answer(final)
         finally:
             final_state = self.pool.get_state()
