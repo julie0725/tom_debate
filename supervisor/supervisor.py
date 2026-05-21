@@ -29,6 +29,7 @@ class Supervisor:
         self.max_tokens = sys_cfg.get("max_tokens", 2000)
         self.provider = sys_cfg.get("provider", "openai")
         self.base_url = sys_cfg.get("base_url", None)
+        self.temperature = sys_cfg.get("temperature", 0.0)
 
         self.max_rounds = config.get("debate", {}).get("max_rounds", 3)
         self.use_debate = config.get("debate", {}).get("use_debate", True)
@@ -39,17 +40,20 @@ class Supervisor:
         if agent_cfg.get("use_agent1", True):
             self.agents[1] = Agent1Context(
                 model=self.model, max_tokens=self.max_tokens,
-                provider=self.provider, base_url=self.base_url
+                provider=self.provider, base_url=self.base_url,
+                temperature=self.temperature
             )
         if agent_cfg.get("use_agent2", True):
             self.agents[2] = Agent2Character(
                 model=self.model, max_tokens=self.max_tokens,
-                provider=self.provider, base_url=self.base_url
+                provider=self.provider, base_url=self.base_url,
+                temperature=self.temperature
             )
         if agent_cfg.get("use_agent3", True):
             self.agents[3] = Agent3Perspective(
                 model=self.model, max_tokens=self.max_tokens,
-                provider=self.provider, base_url=self.base_url
+                provider=self.provider, base_url=self.base_url,
+                temperature=self.temperature
             )
 
         self.client = get_llm_client(provider=self.provider, base_url=self.base_url)
@@ -60,6 +64,7 @@ class Supervisor:
             client=self.client,
             model=self.model,
             max_tokens=self.max_tokens,
+            temperature=self.temperature
         )
         self.correction_prompt = self._load_correction_prompt()
 
@@ -171,7 +176,8 @@ INSTRUCTIONS:
             model=self.model,
             system_prompt=self.correction_prompt,
             user_content=user_content,
-            max_tokens=self.max_tokens
+            max_tokens=self.max_tokens,
+            temperature=self.temperature
         )
         logger.info(f"[Supervisor] Correction generated: {correction[:100]}...")
         return correction

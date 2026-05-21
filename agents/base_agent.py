@@ -24,13 +24,15 @@ class BaseAgent(ABC):
         model: str = "gpt-3.5-turbo",
         max_tokens: int = 2000,
         provider: str = "openai",
-        base_url: str = None
+        base_url: str = None,
+        temperature: float = 0.0
     ):
         self.agent_id = agent_id
         self.model = model
         self.max_tokens = max_tokens
         self.client = get_llm_client(provider=provider, base_url=base_url)
         self.system_prompt = self._load_prompt()
+        self.temperature = temperature 
 
     def _load_prompt(self) -> str:
         prompt_path = Path(__file__).parent.parent / "prompts" / f"agent{self.agent_id}_prompt.txt"
@@ -73,7 +75,8 @@ class BaseAgent(ABC):
             model=self.model,
             system_prompt=self.system_prompt,
             user_content=user_content,
-            max_tokens=self.max_tokens
+            max_tokens=self.max_tokens,
+            temperature=self.temperature
         )
 
     def _parse_json_response(self, raw: str) -> dict:
