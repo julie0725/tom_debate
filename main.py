@@ -18,7 +18,7 @@ from pathlib import Path
 
 from user.ai_user import AIUser
 from evaluation.evaluator import Evaluator
-from evaluation.ablation import AblationRunner
+from evaluation.no_agent_ablation import AblationRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,13 +101,11 @@ def run_batch(config: dict, dataset_path: str, limit: int = None):
     evaluator.evaluate_from_jsonl(results_file=results_file, output_file=output_file)
 
 
-def run_ablation(config: dict, dataset_path: str):
-    """Ablation study 실행"""
-    dataset = load_dataset(dataset_path)
-    if not dataset:
-        return
-    runner = AblationRunner(base_config=config, dataset=dataset)
+def run_no_agent_ablation(config: dict, dataset_path: str, limit: int = None):
+    """No-agent ablation: Semantic/Ego/Observer 하나씩 제거"""
+    runner = AblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
     runner.run_all()
+    
 
 
 def run_eval_only(config: dict):
@@ -118,7 +116,7 @@ def run_eval_only(config: dict):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ToM Multi-Agent Debate System")
-    parser.add_argument("--mode", choices=["single", "batch", "ablation", "eval"],
+    parser.add_argument("--mode", choices=["single", "batch", "no_agent_ablation", "eval"],
                         default="single", help="실행 모드")
     parser.add_argument("--config", default="config/config.yaml", help="설정 파일 경로")
     parser.add_argument("--dataset", default="data/hitom/Hi-ToM_data.json", help="데이터셋 경로")
@@ -131,7 +129,7 @@ if __name__ == "__main__":
         run_single(config)
     elif args.mode == "batch":
         run_batch(config, args.dataset, limit=args.limit)
-    elif args.mode == "ablation":
-        run_ablation(config, args.dataset)
+    elif args.mode == "no_agent_ablation":
+        run_no_agent_ablation(config, args.dataset, limit=args.limit)
     elif args.mode == "eval":
         run_eval_only(config)
