@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 
 class Agent1Context(BaseAgent):
-    def __init__(self, model: str = "gpt-3.5-turbo", max_tokens: int = 2000, provider: str = "openai", base_url: str = None):
-        super().__init__(agent_id=1, model=model, max_tokens=max_tokens, provider=provider, base_url=base_url)
+    def __init__(self, model: str = "gpt-3.5-turbo", max_tokens: int = 2000, provider: str = "openai", base_url: str = None, temperature: float = 0.0):
+        super().__init__(agent_id=1, model=model, max_tokens=max_tokens, provider=provider, base_url=base_url, temperature=temperature)
 
     def reason(self, state_dict: dict) -> dict:
         user_prompt = self._build_user_prompt(state_dict)
