@@ -79,6 +79,7 @@ def call_llm(
         system_prompt: 시스템 프롬프트
         user_content : 유저 메시지
         max_tokens   : 최대 토큰 수
+        temperature  : 샘플링 온도 (0.0 = 결정적)
 
     Returns:
         LLM 응답 텍스트

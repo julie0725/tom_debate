@@ -30,6 +30,7 @@ class BaseAgent(ABC):
         self.agent_id = agent_id
         self.model = model
         self.max_tokens = max_tokens
+        self.temperature = temperature
         self.client = get_llm_client(provider=provider, base_url=base_url)
         self.system_prompt = self._load_prompt()
         self.temperature = temperature 

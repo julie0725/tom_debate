@@ -3,22 +3,26 @@ main.py
 -------
 전체 파이프라인 진입점
 사용법:
-  python main.py --mode single   # 단일 샘플 실행
-  python main.py --mode batch    # 데이터셋 전체 실행
-  python main.py --mode ablation # Ablation study 실행
-  python main.py --mode eval     # 저장된 결과 평가만
+  python main.py --mode single                # 단일 샘플 실행
+  python main.py --mode batch                 # 데이터셋 전체 실행
+  python main.py --mode no_agent_ablation     # 에이전트 1개 제거 ablation 
+  python main.py --mode single_agent_ablation # 에이전트 2개 제거 ablation 
+  python main.py --mode supervisor_ablation   # supervisor 제거 ablation 
+  python main.py --mode no_debate_ablation    # 토론 제거 ablation
+  python main.py --mode eval                  # 저장된 결과 평가만
 """
 from dotenv import load_dotenv
 load_dotenv()
 import argparse
-import json
 import logging
 import yaml
-from pathlib import Path
 
 from user.ai_user import AIUser
 from evaluation.evaluator import Evaluator
-from evaluation.no_agent_ablation import AblationRunner
+from evaluation.no_agent_ablation import AblationRunner as NoAgentAblationRunner
+from evaluation.single_agent_ablation import SingleAgentAblationRunner
+from evaluation.no_supervisor_ablation import SupervisorAblationRunner
+from evaluation.no_debate_ablation import NoDebateAblationRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,34 +34,6 @@ logger = logging.getLogger(__name__)
 def load_config(config_path: str = "config/config.yaml") -> dict:
     with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
-def load_dataset(dataset_path: str) -> list:
-    """Load a JSON or JSONL dataset file. Used by ablation mode."""
-    path = Path(dataset_path)
-    if not path.exists():
-        logger.error(f"Dataset not found: {dataset_path}")
-        return []
-
-    samples = []
-    if path.suffix == ".jsonl":
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    samples.append(json.loads(line))
-    else:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                samples = data
-            elif isinstance(data, dict) and "data" in data:
-                samples = data["data"]
-            else:
-                samples = [data]
-
-    logger.info(f"Loaded {len(samples)} samples from {dataset_path}")
-    return samples
 
 
 def run_single(config: dict):
@@ -93,7 +69,6 @@ def run_batch(config: dict, dataset_path: str, limit: int = None):
     ai_user = AIUser(config=config)
     ai_user.submit_from_dataset(dataset_path, limit=limit)
 
-    # results_file was injected into config by submit_from_dataset
     results_file = config["evaluation"]["results_file"]
     output_file = results_file.replace("results_", "evaluation_").replace(".jsonl", ".json")
 
@@ -102,10 +77,27 @@ def run_batch(config: dict, dataset_path: str, limit: int = None):
 
 
 def run_no_agent_ablation(config: dict, dataset_path: str, limit: int = None):
-    """No-agent ablation: Semantic/Ego/Observer 하나씩 제거"""
-    runner = AblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
+    """에이전트 1개 제거 ablation (채린)"""
+    runner = NoAgentAblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
     runner.run_all()
-    
+
+
+def run_single_agent_ablation(config: dict, dataset_path: str, limit: int = None):
+    """에이전트 2개 제거 ablation (시연)"""
+    runner = SingleAgentAblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
+    runner.run_all()
+
+
+def run_supervisor_ablation(config: dict, dataset_path: str, limit: int = None):
+    """supervisor 제거 ablation (유나)"""
+    runner = SupervisorAblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
+    runner.run_all()
+
+
+def run_no_debate_ablation(config: dict, limit: int = None):
+    """토론 제거 ablation (주연) — BigToM + HiToM 동시 실행"""
+    runner = NoDebateAblationRunner(base_config=config, limit=limit)
+    runner.run_all()
 
 
 def run_eval_only(config: dict):
@@ -116,11 +108,16 @@ def run_eval_only(config: dict):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ToM Multi-Agent Debate System")
-    parser.add_argument("--mode", choices=["single", "batch", "no_agent_ablation", "eval"],
-                        default="single", help="실행 모드")
+    parser.add_argument(
+        "--mode",
+        choices=["single", "batch", "no_agent_ablation", "single_agent_ablation",
+                 "supervisor_ablation", "no_debate_ablation", "eval"],
+        default="single",
+        help="실행 모드"
+    )
     parser.add_argument("--config", default="config/config.yaml", help="설정 파일 경로")
     parser.add_argument("--dataset", default="data/hitom/Hi-ToM_data.json", help="데이터셋 경로")
-    parser.add_argument("--limit", type=int, default=None, help="batch 모드에서 처리할 최대 샘플 수")
+    parser.add_argument("--limit", type=int, default=None, help="처리할 최대 샘플 수")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -131,5 +128,11 @@ if __name__ == "__main__":
         run_batch(config, args.dataset, limit=args.limit)
     elif args.mode == "no_agent_ablation":
         run_no_agent_ablation(config, args.dataset, limit=args.limit)
+    elif args.mode == "single_agent_ablation":
+        run_single_agent_ablation(config, args.dataset, limit=args.limit)
+    elif args.mode == "supervisor_ablation":
+        run_supervisor_ablation(config, args.dataset, limit=args.limit)
+    elif args.mode == "no_debate_ablation":
+        run_no_debate_ablation(config, limit=args.limit)
     elif args.mode == "eval":
         run_eval_only(config)

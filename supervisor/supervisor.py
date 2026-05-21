@@ -34,6 +34,7 @@ class Supervisor:
         self.max_rounds = config.get("debate", {}).get("max_rounds", 3)
         self.use_debate = config.get("debate", {}).get("use_debate", True)
         self.tiebreak_agent = config.get("debate", {}).get("tiebreak_agent", 3)
+        self.use_correction = config.get("supervisor", {}).get("use_correction", True)
 
         agent_cfg = config.get("agents", {})
         self.agents = {}
@@ -64,7 +65,7 @@ class Supervisor:
             client=self.client,
             model=self.model,
             max_tokens=self.max_tokens,
-            temperature=self.temperature
+            temperature=self.temperature,
         )
         self.correction_prompt = self._load_correction_prompt()
 
@@ -107,9 +108,10 @@ class Supervisor:
                 state.debate_triggered = True
                 self.pool.update_status("debating")
                 logger.info("[Supervisor] Disagreement detected. Starting debate.")
+                correction_fn = self._call_supervisor_correction if self.use_correction else None
                 final = await self.debate_manager.run_debate(
                     pool=self.pool,
-                    supervisor_correction_fn=self._call_supervisor_correction,
+                    supervisor_correction_fn=correction_fn,
                     run_logger=self.run_logger
                 )
                 self.pool.set_final_answer(final)
