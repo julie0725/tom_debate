@@ -97,31 +97,28 @@ class DebateManager:
                 logger.info(f"[Debate] Consensus reached at round {round_num}")
                 return self._extract_answer_from_state(state)
 
-        logger.info("[Debate] Max rounds reached. Supervisor analyzing errors...")
+        logger.info("[Debate] Max rounds reached. Re-reasoning from scratch...")
 
         if supervisor_correction_fn:
             state = pool.get_state()
             correction = supervisor_correction_fn(state, self.accumulated_flags)
             pool.update_supervisor_correction(correction)
-
             if run_logger:
                 run_logger.log_supervisor_correction(correction)
 
-            pool.update_debate_context({})
-            logger.info("[Debate] Re-reasoning from scratch...")
+        pool.update_debate_context({}) # after supervisor correction, clear the round-specific context to avoid confusion in the fresh re-reasoning step
+        await self._re_reason_fresh(pool)
 
-            await self._re_reason_fresh(pool)
+        state = pool.get_state()
+        agreement, answer_map = self._check_agreement(state)
 
-            state = pool.get_state()
-            agreement, answer_map = self._check_agreement(state)
+        if run_logger:
+            run_logger.log_agent_outputs(state.agent_outputs, label="fresh_reInfer")
+            run_logger.log_context_file(asdict(state), label="after_correction_reInfer")
 
-            if run_logger:
-                run_logger.log_agent_outputs(state.agent_outputs, label="fresh_reInfer")
-                run_logger.log_context_file(asdict(state), label="after_correction_reInfer")
-
-            if agreement:
-                logger.info("[Debate] Consensus reached after correction.")
-                return self._extract_answer_from_state(state)
+        if agreement:
+            logger.info("[Debate] Consensus reached after re-reasoning.")
+            return self._extract_answer_from_state(state)
 
         logger.info("[Debate] Applying majority vote.")
         state = pool.get_state()
