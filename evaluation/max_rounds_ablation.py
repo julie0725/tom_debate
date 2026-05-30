@@ -1,19 +1,19 @@
 """
-no_debate_ablation.py
----------------------
-토론 유무 ablation study 
+max_rounds_ablation.py
+----------------------
+토론 최대 라운드 수 ablation study
 
 목적:
-  다중 에이전트 토론이 성능에 유의미한 차이를 주는지 검증.
-  full_system(토론 있음) vs no_debate(토론 없음) 비교.
+  max_rounds(1 / 3 / 5)에 따른 성능 변화를 측정.
   Big ToM / Hi ToM 데이터셋 각각 결과 출력.
 
 조건:
-  full_system : 모든 에이전트 + 토론 + supervisor 보정
-  no_debate   : 모든 에이전트, 토론 없이 초기 추론 결과로 답변
+  rounds_1 : 최대 1라운드 토론
+  rounds_3 : 최대 3라운드 토론 (기본값)
+  rounds_5 : 최대 5라운드 토론
 
 사용:
-  python main.py --mode no_debate_ablation
+  python main.py --mode max_rounds_ablation
 """
 
 import copy
@@ -30,32 +30,42 @@ logger = logging.getLogger(__name__)
 
 ABLATION_CONDITIONS = [
     {
-        "name": "full_system",
-        "description": "Full system: all agents + debate + supervisor correction",
+        "name": "rounds_1",
+        "description": "Max 1 debate round",
         "overrides": {
             "agents": {"use_agent1": True, "use_agent2": True, "use_agent3": True},
-            "debate": {"use_debate": True},
+            "debate": {"use_debate": True, "max_rounds": 1},
             "supervisor": {"use_correction": True},
         },
     },
     {
-        "name": "no_debate",
-        "description": "No debate: all agents, single-pass reasoning only",
+        "name": "rounds_3",
+        "description": "Max 3 debate rounds (default)",
         "overrides": {
             "agents": {"use_agent1": True, "use_agent2": True, "use_agent3": True},
-            "debate": {"use_debate": False},
+            "debate": {"use_debate": True, "max_rounds": 3},
+            "supervisor": {"use_correction": True},
+        },
+    },
+    {
+        "name": "rounds_5",
+        "description": "Max 5 debate rounds",
+        "overrides": {
+            "agents": {"use_agent1": True, "use_agent2": True, "use_agent3": True},
+            "debate": {"use_debate": True, "max_rounds": 5},
+            "supervisor": {"use_correction": True},
         },
     },
 ]
 
 
-class NoDebateAblationRunner:
+class MaxRoundsAblationRunner:
     def __init__(
         self,
         base_config: dict,
         bigtom_path: str = "data/bigtom/bigtom.csv",
         hitom_path: str = "data/hitom/Hi-ToM_data.json",
-        output_dir: str = "outputs/ablation_no_debate/",
+        output_dir: str = "outputs/ablation_max_rounds/",
         limit: int = None,
     ):
         self.base_config = base_config
@@ -71,7 +81,7 @@ class NoDebateAblationRunner:
         all_results = {}
 
         for dataset_name, dataset_path in self.dataset_paths.items():
-            logger.info(f"\n[NoDebateAblation] Dataset: {dataset_name}")
+            logger.info(f"\n[MaxRoundsAblation] Dataset: {dataset_name}")
             print(f"\n{'#'*60}")
             print(f"  Dataset: {dataset_name}")
             print(f"{'#'*60}")
@@ -92,7 +102,7 @@ class NoDebateAblationRunner:
         return all_results
 
     def _run_one(self, condition: dict, dataset_name: str, dataset_path: str) -> dict:
-        logger.info(f"\n[NoDebateAblation] Running: {condition['name']} on {dataset_name}")
+        logger.info(f"\n[MaxRoundsAblation] Running: {condition['name']} on {dataset_name}")
         print(f"\n{'='*60}")
         print(f"  Condition : {condition['name']}")
         print(f"  Dataset   : {dataset_name}")
@@ -116,7 +126,7 @@ class NoDebateAblationRunner:
         try:
             ai_user.submit_from_dataset(dataset_path, limit=self.limit)
         except Exception as e:
-            logger.error(f"[NoDebateAblation] {condition['name']} on {dataset_name} failed: {e}")
+            logger.error(f"[MaxRoundsAblation] {condition['name']} on {dataset_name} failed: {e}")
             return {"description": condition["description"], "summary": {}}
 
         results_file = cfg.get("evaluation", {}).get("results_file")
@@ -136,10 +146,10 @@ class NoDebateAblationRunner:
     def _print_comparison(self, all_results: dict) -> None:
         for dataset_name, dataset_results in all_results.items():
             print("\n" + "=" * 80)
-            print(f"  DEBATE ABLATION — {dataset_name}")
+            print(f"  MAX ROUNDS ABLATION — {dataset_name}")
             print("=" * 80)
             header = (
-                f"  {'Condition':<14} {'Q1':>8} {'Q2':>8} {'Q3':>8} "
+                f"  {'Condition':<12} {'Q1':>8} {'Q2':>8} {'Q3':>8} "
                 f"{'Joint':>8} {'Conflicts':>12} {'Avg Rounds':>12}"
             )
             print(header)
@@ -153,7 +163,7 @@ class NoDebateAblationRunner:
                 avg_rounds = s.get("avg_debate_rounds", 0) or 0
 
                 print(
-                    f"  {name:<14} "
+                    f"  {name:<12} "
                     f"{(s.get('q1_belief_accuracy', 0) or 0):>8.2%} "
                     f"{(s.get('q2_desire_accuracy', 0) or 0):>8.2%} "
                     f"{(s.get('q3_action_accuracy', 0) or 0):>8.2%} "
@@ -183,7 +193,7 @@ class NoDebateAblationRunner:
                     s = data.get("summary", {})
                     total = s.get("total", 0) or 0
                     trigger_rate = s.get("debate_trigger_rate", 0) or 0
-                    among = s.get("avg_debate_rounds_among_debated") //추가 
+                    among = s.get("avg_debate_rounds_among_debated")
                     writer.writerow({
                         "dataset": dataset_name,
                         "condition": name,
@@ -196,4 +206,4 @@ class NoDebateAblationRunner:
                         "avg_rounds": round(s.get("avg_debate_rounds", 0) or 0, 2),
                         "avg_rounds_debated": round(among, 2) if among is not None else "",
                     })
-        logger.info(f"[NoDebateAblation] CSV saved: {csv_path}")
+        logger.info(f"[MaxRoundsAblation] CSV saved: {csv_path}")
