@@ -23,6 +23,7 @@ from evaluation.no_agent_ablation import AblationRunner as NoAgentAblationRunner
 from evaluation.single_agent_ablation import SingleAgentAblationRunner
 from evaluation.no_supervisor_ablation import SupervisorAblationRunner
 from evaluation.no_debate_ablation import NoDebateAblationRunner
+from evaluation.max_rounds_ablation import MaxRoundsAblationRunner // MaxRoundsAblationRunner는 tiebreak를 고려해 2/4 대신 rounds 1/3/5 순차적 비교, BigToM + HiToM 동시 실행
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,26 +78,32 @@ def run_batch(config: dict, dataset_path: str, limit: int = None):
 
 
 def run_no_agent_ablation(config: dict, dataset_path: str, limit: int = None):
-    """에이전트 1개 제거 ablation (채린)"""
+    """에이전트 1개 제거 ablation """
     runner = NoAgentAblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
     runner.run_all()
 
 
 def run_single_agent_ablation(config: dict, dataset_path: str, limit: int = None):
-    """에이전트 2개 제거 ablation (시연)"""
+    """에이전트 2개 제거 ablation """
     runner = SingleAgentAblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
     runner.run_all()
 
 
-def run_supervisor_ablation(config: dict, dataset_path: str, limit: int = None):
-    """supervisor 제거 ablation (유나)"""
-    runner = SupervisorAblationRunner(base_config=config, dataset_path=dataset_path, limit=limit)
+def run_supervisor_ablation(config: dict, limit: int = None):
+    """supervisor 제거 ablation — BigToM + HiToM 동시 실행"""
+    runner = SupervisorAblationRunner(base_config=config, limit=limit)
     runner.run_all()
 
 
 def run_no_debate_ablation(config: dict, limit: int = None):
-    """토론 제거 ablation (주연) — BigToM + HiToM 동시 실행"""
+    """토론 제거 ablation — BigToM + HiToM 동시 실행"""
     runner = NoDebateAblationRunner(base_config=config, limit=limit)
+    runner.run_all()
+
+
+def run_max_rounds_ablation(config: dict, limit: int = None):
+    """max_rounds ablation — tiebreak를 고려해 2/4대신 rounds 1/3/5 순차적 비교, BigToM + HiToM 동시 실행"""
+    runner = MaxRoundsAblationRunner(base_config=config, limit=limit)
     runner.run_all()
 
 
@@ -111,7 +118,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         choices=["single", "batch", "no_agent_ablation", "single_agent_ablation",
-                 "supervisor_ablation", "no_debate_ablation", "eval"],
+                 "supervisor_ablation", "no_debate_ablation", "max_rounds_ablation", "eval"],
         default="single",
         help="실행 모드"
     )
@@ -131,8 +138,10 @@ if __name__ == "__main__":
     elif args.mode == "single_agent_ablation":
         run_single_agent_ablation(config, args.dataset, limit=args.limit)
     elif args.mode == "supervisor_ablation":
-        run_supervisor_ablation(config, args.dataset, limit=args.limit)
+        run_supervisor_ablation(config, limit=args.limit)
     elif args.mode == "no_debate_ablation":
         run_no_debate_ablation(config, limit=args.limit)
+    elif args.mode == "max_rounds_ablation": // max_rounds_ablation 추가 
+        run_max_rounds_ablation(config, limit=args.limit)
     elif args.mode == "eval":
         run_eval_only(config)

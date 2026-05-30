@@ -173,7 +173,7 @@ class NoDebateAblationRunner:
         csv_path = self.output_dir / "ablation_comparison.csv"
         fieldnames = [
             "dataset", "condition", "q1_accuracy", "q2_accuracy",
-            "q3_accuracy", "joint_accuracy", "conflicts", "total", "avg_rounds"
+            "q3_accuracy", "joint_accuracy", "conflicts", "total", "avg_rounds", "avg_rounds_debated"
         ]
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -183,6 +183,7 @@ class NoDebateAblationRunner:
                     s = data.get("summary", {})
                     total = s.get("total", 0) or 0
                     trigger_rate = s.get("debate_trigger_rate", 0) or 0
+                    among = s.get("avg_debate_rounds_among_debated") //추가 
                     writer.writerow({
                         "dataset": dataset_name,
                         "condition": name,
@@ -193,5 +194,6 @@ class NoDebateAblationRunner:
                         "conflicts": int(round(trigger_rate * total)),
                         "total": total,
                         "avg_rounds": round(s.get("avg_debate_rounds", 0) or 0, 2),
+                        "avg_rounds_debated": round(among, 2) if among is not None else "",
                     })
         logger.info(f"[NoDebateAblation] CSV saved: {csv_path}")
