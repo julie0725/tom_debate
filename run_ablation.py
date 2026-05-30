@@ -247,7 +247,7 @@ def run_condition(
     cfg.setdefault("evaluation", {})["output_dir"] = str(out_dir) + "/"
 
     # 3. 파이프라인 실행
-    AblationAIUser(config=cfg).submit_from_dataset(dataset_path, resume=resume, limit=limit)
+    AblationAIUser(config=cfg).submit_from_dataset(dataset_path, limit=limit)
 
     results_file = cfg["evaluation"].get("results_file", "results.jsonl")
 
