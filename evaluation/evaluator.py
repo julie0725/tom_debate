@@ -100,8 +100,8 @@ class Evaluator:
                 majority_vote_count += 1
             total_rounds += r.get("debate_round", 0)
 
-        // q1/q2/q3 개별 정확도, 모두 맞춘 비율, 토론 진입률, 다수결 적용률, 평균 토론 라운드 수
-        // avg_debate_rounds_among_debated 추가: 토론 진입한 샘플에 한해서 평균 라운드 계산
+        # q1/q2/q3 개별 정확도, 모두 맞춘 비율, 토론 진입률, 다수결 적용률, 평균 토론 라운드 수
+        # avg_debate_rounds_among_debated 추가: 토론 진입한 샘플에 한해서 평균 라운드 계산
         summary = {
             "total": total,
             "q1_belief_accuracy": round(q1_acc / q1_count, 4) if q1_count else None,
@@ -157,6 +157,6 @@ class Evaluator:
         print(f"  Debate trigger rate : {summary['debate_trigger_rate']:.2%}")
         print(f"  Majority vote rate  : {summary['majority_vote_rate']:.2%}")
         print(f"  Avg debate rounds   : {summary['avg_debate_rounds']:.2f}")
-        among = summary.get("avg_debate_rounds_among_debated") // 추가 :  토론 진입한 샘플에 한해서 평균 라운드 계산
+        among = summary.get("avg_debate_rounds_among_debated") # 추가 :  토론 진입한 샘플에 한해서 평균 라운드 계산
         print(f"  Avg rounds (debated): {f'{among:.2f}' if among is not None else 'N/A'}")
         print("="*50 + "\n")

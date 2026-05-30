@@ -226,6 +226,7 @@ def run_condition(
     dataset: str,
     skip_sampling: bool = False,
     resume: bool = False,
+    limit=None
 ) -> dict:
     # 1. 샘플링
     run_sampling(dataset, skip_if_exists=skip_sampling)
@@ -246,7 +247,7 @@ def run_condition(
     cfg.setdefault("evaluation", {})["output_dir"] = str(out_dir) + "/"
 
     # 3. 파이프라인 실행
-    AblationAIUser(config=cfg).submit_from_dataset(dataset_path, resume=resume)
+    AblationAIUser(config=cfg).submit_from_dataset(dataset_path, resume=resume, limit=limit)
 
     results_file = cfg["evaluation"].get("results_file", "results.jsonl")
 
@@ -291,6 +292,7 @@ if __name__ == "__main__":
                         help="샘플 파일이 이미 있으면 재샘플링 건너뜀")
     parser.add_argument("--resume", action="store_true",
                         help="기존 jsonl 결과를 유지하고 미완료 task만 이어서 실행")
+    parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
     result = run_condition(
@@ -299,6 +301,7 @@ if __name__ == "__main__":
         dataset=args.dataset,
         skip_sampling=args.skip_sampling,
         resume=args.resume,
+        limit=args.limit,
     )
 
     print("\n" + "=" * 60)
