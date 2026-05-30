@@ -3,6 +3,8 @@
 outputs/
 __pycache__/
 *.pyc
+.DS_Store
+**/.DS_Store
 
 # 데이터는 용량이 커서 github에 올리기 어려움
 # data/bigtom 폴더 내의 모든 파일을 무시하되, .gitkeep 파일만 예외로 둠
