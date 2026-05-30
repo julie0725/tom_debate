@@ -135,15 +135,15 @@ class NoDebateAblationRunner:
 
     def _print_comparison(self, all_results: dict) -> None:
         for dataset_name, dataset_results in all_results.items():
-            print("\n" + "=" * 80)
+            print("\n" + "=" * 96)
             print(f"  DEBATE ABLATION — {dataset_name}")
-            print("=" * 80)
+            print("=" * 96)
             header = (
                 f"  {'Condition':<14} {'Q1':>8} {'Q2':>8} {'Q3':>8} "
-                f"{'Joint':>8} {'Conflicts':>12} {'Avg Rounds':>12}"
+                f"{'Joint':>8} {'Conflicts':>12} {'Avg Rounds':>12} {'Avg(debated)':>14}"
             )
             print(header)
-            print("-" * 80)
+            print("-" * 96)
 
             for name, data in dataset_results.items():
                 s = data.get("summary", {})
@@ -151,6 +151,7 @@ class NoDebateAblationRunner:
                 trigger_rate = s.get("debate_trigger_rate", 0) or 0
                 conflicts = int(round(trigger_rate * total))
                 avg_rounds = s.get("avg_debate_rounds", 0) or 0
+                among = s.get("avg_debate_rounds_among_debated")
 
                 print(
                     f"  {name:<14} "
@@ -159,15 +160,17 @@ class NoDebateAblationRunner:
                     f"{(s.get('q3_action_accuracy', 0) or 0):>8.2%} "
                     f"{(s.get('joint_accuracy', 0) or 0):>8.2%} "
                     f"{f'{conflicts}/{total}':>12} "
-                    f"{avg_rounds:>12.2f}"
+                    f"{avg_rounds:>12.2f} "
+                    f"{f'{among:.2f}' if among is not None else 'N/A':>14}"
                 )
 
-            print("=" * 80)
+            print("=" * 96)
             print("  Q1/Q2/Q3 : 질문 유형별 정확도 (Belief / Desire / Action)")
             print("  Joint    : q1, q2, q3 모두 정답인 비율")
             print("  Conflicts: 초기 추론 불일치 → 토론 진입한 샘플 수 / 전체")
-            print("  Avg Rounds: 샘플당 평균 토론 라운드 수")
-            print("=" * 80 + "\n")
+            print("  Avg Rounds: 샘플당 평균 토론 라운드 수 (전체 기준)")
+            print("  Avg(debated): 토론 진입 샘플만의 평균 라운드 수")
+            print("=" * 96 + "\n")
 
     def _save_csv(self, all_results: dict) -> None:
         csv_path = self.output_dir / "ablation_comparison.csv"
