@@ -23,7 +23,7 @@ from evaluation.no_agent_ablation import AblationRunner as NoAgentAblationRunner
 from evaluation.single_agent_ablation import SingleAgentAblationRunner
 from evaluation.no_supervisor_ablation import SupervisorAblationRunner
 from evaluation.no_debate_ablation import NoDebateAblationRunner
-from evaluation.max_rounds_ablation import MaxRoundsAblationRunner // MaxRoundsAblationRunner는 tiebreak를 고려해 2/4 대신 rounds 1/3/5 순차적 비교, BigToM + HiToM 동시 실행
+from evaluation.max_rounds_ablation import MaxRoundsAblationRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         run_supervisor_ablation(config, limit=args.limit)
     elif args.mode == "no_debate_ablation":
         run_no_debate_ablation(config, limit=args.limit)
-    elif args.mode == "max_rounds_ablation": // max_rounds_ablation 추가 
+    elif args.mode == "max_rounds_ablation": 
         run_max_rounds_ablation(config, limit=args.limit)
     elif args.mode == "eval":
         run_eval_only(config)

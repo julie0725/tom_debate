@@ -77,6 +77,10 @@ class Evaluator:
         debate_triggered_count = 0
         majority_vote_count = 0
         total_rounds = 0
+        total_elapsed = 0.0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_cost = 0.0
 
         for r in records:
             fa = r.get("final_answer", {})
@@ -99,9 +103,13 @@ class Evaluator:
             if r.get("majority_vote_applied"):
                 majority_vote_count += 1
             total_rounds += r.get("debate_round", 0)
+            total_elapsed += r.get("elapsed_sec", 0)
+            total_prompt_tokens += r.get("prompt_tokens", 0)
+            total_completion_tokens += r.get("completion_tokens", 0)
+            total_cost += r.get("estimated_cost_usd", 0)
 
-        // q1/q2/q3 개별 정확도, 모두 맞춘 비율, 토론 진입률, 다수결 적용률, 평균 토론 라운드 수
-        // avg_debate_rounds_among_debated 추가: 토론 진입한 샘플에 한해서 평균 라운드 계산
+        # q1/q2/q3 개별 정확도, 모두 맞춘 비율, 토론 진입률, 다수결 적용률, 평균 토론 라운드 수
+        # avg_debate_rounds_among_debated 추가: 토론 진입한 샘플에 한해서 평균 라운드 계산
         summary = {
             "total": total,
             "q1_belief_accuracy": round(q1_acc / q1_count, 4) if q1_count else None,
@@ -112,6 +120,13 @@ class Evaluator:
             "majority_vote_rate": round(majority_vote_count / total, 4),
             "avg_debate_rounds": round(total_rounds / total, 4),
             "avg_debate_rounds_among_debated": round(total_rounds / debate_triggered_count, 4) if debate_triggered_count else None,
+            "avg_elapsed_sec": round(total_elapsed / total, 2) if total_elapsed else None,
+            "total_elapsed_sec": round(total_elapsed, 2) if total_elapsed else None,
+            "throughput_samples_per_hour": round(3600 / (total_elapsed / total), 1) if total_elapsed else None,
+            "total_prompt_tokens": total_prompt_tokens if total_prompt_tokens else None,
+            "total_completion_tokens": total_completion_tokens if total_completion_tokens else None,
+            "total_cost_usd": round(total_cost, 6) if total_cost else None,
+            "avg_cost_per_sample": round(total_cost / total, 6) if total_cost else None,
         }
 
         out_path = self.output_dir / output_file
@@ -157,6 +172,31 @@ class Evaluator:
         print(f"  Debate trigger rate : {summary['debate_trigger_rate']:.2%}")
         print(f"  Majority vote rate  : {summary['majority_vote_rate']:.2%}")
         print(f"  Avg debate rounds   : {summary['avg_debate_rounds']:.2f}")
-        among = summary.get("avg_debate_rounds_among_debated") // 추가 :  토론 진입한 샘플에 한해서 평균 라운드 계산
+        among = summary.get("avg_debate_rounds_among_debated")
         print(f"  Avg rounds (debated): {f'{among:.2f}' if among is not None else 'N/A'}")
-        print("="*50 + "\n")
+        if summary.get("avg_elapsed_sec") is not None:
+            print("-"*50)
+            print(f"  Avg elapsed sec     : {summary['avg_elapsed_sec']:.2f}s")
+            print(f"  Throughput          : {summary['throughput_samples_per_hour']:.1f} samples/hour")
+            print(f"  Total tokens        : {(summary.get('total_prompt_tokens') or 0) + (summary.get('total_completion_tokens') or 0):,}")
+            print(f"  Avg cost/sample     : ${summary['avg_cost_per_sample']:.4f}")
+            print(f"  Total cost          : ${summary['total_cost_usd']:.4f}")
+        print("="*50)
+        print("\n  [ METRIC DEFINITIONS ]")
+        W = 100
+        print("  " + "-" * W)
+        defs = [
+            ("Q1/Q2/Q3 accuracy",    "correct_q / total_q",                           "질문 유형별 정답 비율"),
+            ("Joint accuracy",        "all_q_correct / total",                          "Q1+Q2+Q3 모두 정답인 샘플 비율"),
+            ("Debate trigger rate",   "debated_samples / total",                        "초기 불일치 -> 토론 진입 비율"),
+            ("Avg debate rounds",     "sum(debate_rounds) / total",                     "전체 샘플 기준 평균 토론 라운드"),
+            ("Avg rounds (debated)",  "sum(debate_rounds) / debated_samples",           "토론 진입 샘플만의 평균 라운드"),
+            ("Majority vote rate",    "majority_vote_samples / total",                  "다수결 적용 비율"),
+            ("Avg elapsed sec",       "sum(elapsed) / total",                           "샘플당 평균 처리 시간(초)"),
+            ("Throughput",            "3600 / avg_elapsed_sec",                         "시간당 처리 가능 샘플 수"),
+            ("Avg cost/sample",       "(prompt*$0.50 + completion*$1.50) / 1M / total", "샘플당 평균 API 비용(USD)"),
+            ("Total cost",            "sum(cost_per_sample)",                           "전체 API 비용(USD)"),
+        ]
+        for name, formula, desc in defs:
+            print(f"  {name:<22}  {formula:<45}  {desc}")
+        print("  " + "-" * W + "\n")

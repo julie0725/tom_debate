@@ -186,7 +186,7 @@ class NoDebateAblationRunner:
                     s = data.get("summary", {})
                     total = s.get("total", 0) or 0
                     trigger_rate = s.get("debate_trigger_rate", 0) or 0
-                    among = s.get("avg_debate_rounds_among_debated") //추가 
+                    among = s.get("avg_debate_rounds_among_debated")
                     writer.writerow({
                         "dataset": dataset_name,
                         "condition": name,
