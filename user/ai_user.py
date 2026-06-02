@@ -10,6 +10,7 @@ AI User: 시스템의 단일 입력 게이트웨이
 import asyncio
 import logging
 import json
+import time
 from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
@@ -17,6 +18,7 @@ from typing import Optional
 
 from core.context_file import ToMState, ToMAnswers
 from core.extractor import Extractor
+from core.llm_client import TokenCounter, set_token_counter
 from core.message_pool import get_message_pool, reset_message_pool
 from core.tom_task import ToMTask
 from data.adapters.proxy import Proxy
@@ -90,14 +92,13 @@ class AIUser:
         for i, task in enumerate(tasks):
             logger.info(f"[AIUser] Processing {i + 1}/{len(tasks)} | id={task.dataset_id}")
             try:
-                self._submit(task)
+                self._submit(task, idx=i + 1, total=len(tasks))
             except Exception as e:
                 logger.error(f"[AIUser] Sample {task.dataset_id} failed: {e}")
 
     # ── Internal executor ─────────────────────────────────────────────────────
 
-    def _submit(self, task: ToMTask) -> ToMState:
-        """Run the full pipeline for a single ToMTask and return the final state."""
+    def _submit(self, task: ToMTask, idx: int = None, total: int = None) -> ToMState:
         questions = [{"id": "q1", "text": task.question}]
         if task.metadata.get("q2"):
             questions.append({"id": "q2", "text": task.metadata["q2"]})
@@ -130,10 +131,24 @@ class AIUser:
         pool.publish(state, publisher="ai_user")
         logger.info(f"[AIUser] Published context file | dataset_id={task.dataset_id}")
 
+        model = self.config.get("system", {}).get("model", "gpt-3.5-turbo")
+        counter = TokenCounter()
+        set_token_counter(counter)
+        start = time.time()
+
         supervisor = Supervisor(pool=pool, config=self.config)
         final_state = asyncio.run(supervisor.run())
 
-        self._save_result(final_state)
+        elapsed = round(time.time() - start, 2)
+        set_token_counter(None)
+        prompt_tok, completion_tok = counter.get()
+        cost = counter.cost(model)
+        total_tok = prompt_tok + completion_tok
+
+        if idx and total:
+            print(f"  [{idx}/{total}] {task.dataset_id}  {elapsed:.1f}s | {total_tok:,} tokens | ~${cost:.4f}")
+
+        self._save_result(final_state, elapsed, prompt_tok, completion_tok, cost)
 
         md_path = self.output_dir / f"{task.dataset_id or 'result'}.md"
         md_path.write_text(pool.dump_markdown(), encoding="utf-8")
@@ -141,8 +156,9 @@ class AIUser:
         logger.info(f"[AIUser] Pipeline complete | status={final_state.status}")
         return final_state
 
-    def _save_result(self, state: ToMState) -> None:
-        """Append result to the per-dataset JSONL file."""
+    def _save_result(self, state: ToMState, elapsed_sec: float = 0.0,
+                     prompt_tokens: int = 0, completion_tokens: int = 0,
+                     estimated_cost_usd: float = 0.0) -> None:
         results_file = self.config.get("evaluation", {}).get("results_file", "results.jsonl")
         log_path = self.output_dir / results_file
         record = {
@@ -154,6 +170,10 @@ class AIUser:
             "final_answer": asdict(state.final_answer),
             "ground_truth": asdict(state.ground_truth) if state.ground_truth else None,
             "agent_outputs": state.agent_outputs,
+            "elapsed_sec": elapsed_sec,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "estimated_cost_usd": round(estimated_cost_usd, 6),
         }
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
