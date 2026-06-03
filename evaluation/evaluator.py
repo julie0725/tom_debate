@@ -5,6 +5,7 @@ Big-ToM / Hi-ToM 정답과 최종 답변 비교
 논문 실험용 정량 평가 스크립트
 """
 
+import csv
 import json
 import logging
 from pathlib import Path
@@ -48,7 +49,7 @@ class Evaluator:
             "all_correct": all(present) if present else False,
         }
 
-    def evaluate_from_jsonl(self, jsonl_path: str = None, results_file: str = None, output_file: str = "evaluation_summary.json") -> dict:
+    def evaluate_from_jsonl(self, jsonl_path: str = None, results_file: str = None, output_file: str = "evaluation_summary.json", dataset_name: str = None, silent: bool = False) -> dict:
         """results.jsonl 전체 평가 — 논문 Table 기준 집계"""
         if jsonl_path:
             path = Path(jsonl_path)
@@ -133,8 +134,11 @@ class Evaluator:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
 
+        if dataset_name:
+            summary["dataset_name"] = dataset_name
         logger.info(f"[Evaluator] Summary saved to {out_path}")
-        self._print_summary(summary)
+        if not silent:
+            self._print_summary(summary, dataset_name=dataset_name)
         return summary
 
     def _match(self, pred: str, gt: str) -> bool:
@@ -157,13 +161,15 @@ class Evaluator:
         match_count = sum(1 for kw in gt_keywords if kw in pred_lower)
         return match_count / len(gt_keywords) >= 0.5
 
-    def _print_summary(self, summary: dict) -> None:
+    def _print_summary(self, summary: dict, dataset_name: str = None) -> None:
         def fmt(v):
             return f"{v:.2%}" if v is not None else "N/A"
 
         print("\n" + "="*50)
         print("  EVALUATION SUMMARY")
         print("="*50)
+        if dataset_name:
+            print(f"  Dataset             : {dataset_name}")
         print(f"  Total samples       : {summary['total']}")
         print(f"  Q1 Belief accuracy  : {fmt(summary['q1_belief_accuracy'])}")
         print(f"  Q2 Desire accuracy  : {fmt(summary['q2_desire_accuracy'])}")
@@ -200,3 +206,51 @@ class Evaluator:
         for name, formula, desc in defs:
             print(f"  {name:<22}  {formula:<45}  {desc}")
         print("  " + "-" * W + "\n")
+
+    def save_samples_csv(self, jsonl_path: str, output_path: str, dataset_name: str, system_name: str) -> None:
+        path = Path(jsonl_path)
+        if not path.exists():
+            return
+        fieldnames = [
+            "dataset_name", "system", "dataset_id",
+            "elapsed_sec", "prompt_tokens", "completion_tokens", "estimated_cost_usd",
+            "debate_round", "debate_triggered", "majority_vote_applied", "supervisor_used",
+            "q1_correct", "q2_correct", "q3_correct", "all_correct",
+        ]
+        rows = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                r = json.loads(line)
+                fa = r.get("final_answer", {})
+                gt = r.get("ground_truth")
+                if gt:
+                    ev = self.evaluate_single(fa, gt)
+                    q1, q2, q3 = ev["q1_correct"], ev["q2_correct"], ev["q3_correct"]
+                    all_c = ev["all_correct"]
+                else:
+                    q1 = q2 = q3 = all_c = None
+                rows.append({
+                    "dataset_name": dataset_name,
+                    "system": system_name,
+                    "dataset_id": r.get("dataset_id"),
+                    "elapsed_sec": r.get("elapsed_sec"),
+                    "prompt_tokens": r.get("prompt_tokens"),
+                    "completion_tokens": r.get("completion_tokens"),
+                    "estimated_cost_usd": r.get("estimated_cost_usd"),
+                    "debate_round": r.get("debate_round", 0),
+                    "debate_triggered": r.get("debate_triggered", False),
+                    "majority_vote_applied": r.get("majority_vote_applied", False),
+                    "supervisor_used": r.get("supervisor_used", False),
+                    "q1_correct": q1,
+                    "q2_correct": q2,
+                    "q3_correct": q3,
+                    "all_correct": all_c,
+                })
+        with open(output_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if Path(output_path).stat().st_size == 0:
+                writer.writeheader()
+            writer.writerows(rows)
