@@ -14,8 +14,10 @@ main.py
 from dotenv import load_dotenv
 load_dotenv()
 import argparse
+import csv
 import logging
 import yaml
+from pathlib import Path
 
 from user.ai_user import AIUser
 from evaluation.evaluator import Evaluator
@@ -62,7 +64,7 @@ def run_single(config: dict):
     print("="*50)
 
 
-def run_batch(config: dict, dataset_path: str, limit: int = None):
+def run_batch(config: dict, dataset_path: str, limit: int = None, dataset_name: str = None) -> dict:
     """Auto-detect adapter, run pipeline, evaluate."""
     if "evaluation" not in config:
         config["evaluation"] = {}
@@ -74,7 +76,120 @@ def run_batch(config: dict, dataset_path: str, limit: int = None):
     output_file = results_file.replace("results_", "evaluation_").replace(".jsonl", ".json")
 
     evaluator = Evaluator(output_dir=config["evaluation"]["output_dir"])
-    evaluator.evaluate_from_jsonl(results_file=results_file, output_file=output_file)
+    return evaluator.evaluate_from_jsonl(results_file=results_file, output_file=output_file, dataset_name=dataset_name, silent=True)
+
+
+def run_full_batch(config: dict, limit: int = None):
+    """BigToM + HiToM 전체 동시 실행 — PRISM full system"""
+    import copy
+    datasets = {
+        "BigToM": "data/bigtom/bigtom_raw.csv",
+        "HiToM":  "data/hitom/Hi-ToM_data_raw.json",
+    }
+    all_results = {}
+    for dataset_name, dataset_path in datasets.items():
+        print(f"\n{'#'*60}")
+        print(f"  [PRISM] Dataset: {dataset_name}")
+        print(f"{'#'*60}")
+        cfg = copy.deepcopy(config)
+        out_dir = f"outputs/prism_result/{dataset_name.lower()}/"
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        if "evaluation" not in cfg:
+            cfg["evaluation"] = {}
+        cfg["evaluation"]["output_dir"] = out_dir
+        summary = run_batch(cfg, dataset_path, limit=limit, dataset_name=dataset_name)
+        all_results[dataset_name] = summary
+
+        results_file = cfg["evaluation"].get("results_file", "results.jsonl")
+        jsonl_path = Path(out_dir) / results_file
+        samples_csv = Path("outputs/prism_result/prism_samples.csv")
+        if not samples_csv.exists():
+            samples_csv.write_text("")
+        evaluator_inst = Evaluator(output_dir=out_dir)
+        evaluator_inst.save_samples_csv(
+            jsonl_path=str(jsonl_path),
+            output_path=str(samples_csv),
+            dataset_name=dataset_name,
+            system_name="PRISM",
+        )
+        print(f"  Samples CSV: {samples_csv}")
+
+    _print_prism_final_table(all_results)
+    _save_prism_csv(all_results, output_dir="outputs/prism_result/")
+
+
+def _print_prism_final_table(all_results: dict) -> None:
+    W = 60
+    for dataset_name, s in all_results.items():
+        if not s:
+            continue
+        total = s.get("total") or 0
+        trigger_rate = s.get("debate_trigger_rate") or 0
+        total_conflicts = int(round(trigger_rate * total))
+        total_rounds = int(round((s.get("avg_debate_rounds") or 0) * total))
+        print("\n" + "=" * W)
+        print("  FINAL METRICS")
+        print("=" * W)
+        print(f"  {'condition':<26}: PRISM")
+        print(f"  {'dataset':<26}: {dataset_name.lower()}")
+        print(f"  {'total':<26}: {total}")
+        print(f"  {'q1_accuracy':<26}: {s.get('q1_belief_accuracy')}")
+        print(f"  {'q2_accuracy':<26}: {s.get('q2_desire_accuracy')}")
+        print(f"  {'q3_accuracy':<26}: {s.get('q3_action_accuracy')}")
+        print(f"  {'joint_accuracy':<26}: {s.get('joint_accuracy')}")
+        print(f"  {'total_conflicts':<26}: {total_conflicts}")
+        print(f"  {'total_rounds':<26}: {total_rounds}")
+        print(f"  {'conflict_rate':<26}: {trigger_rate}")
+        print(f"  {'debate_trigger_rate':<26}: {trigger_rate}")
+        print(f"  {'avg_debate_rounds':<26}: {s.get('avg_debate_rounds')}")
+        print(f"  {'majority_vote_rate':<26}: {s.get('majority_vote_rate')}")
+        print(f"  {'avg_elapsed_sec':<26}: {s.get('avg_elapsed_sec')}")
+        print(f"  {'throughput_per_hour':<26}: {s.get('throughput_samples_per_hour')}")
+        print(f"  {'avg_cost_per_sample':<26}: {s.get('avg_cost_per_sample')}")
+        print(f"  {'total_cost_usd':<26}: {s.get('total_cost_usd')}")
+        print("=" * W)
+
+
+def _save_prism_csv(all_results: dict, output_dir: str = "outputs/prism_result/") -> None:
+    csv_path = Path(output_dir) / "prism_results.csv"
+    fieldnames = [
+        "dataset", "system", "total",
+        "q1_accuracy", "q2_accuracy", "q3_accuracy", "joint_accuracy",
+        "debate_trigger_rate", "majority_vote_rate",
+        "avg_debate_rounds", "avg_rounds_debated",
+        "avg_elapsed_sec", "total_elapsed_sec", "throughput_samples_per_hour",
+        "total_prompt_tokens", "total_completion_tokens",
+        "total_cost_usd", "avg_cost_per_sample",
+    ]
+    rows = []
+    for dataset_name, s in all_results.items():
+        if not s:
+            continue
+        rows.append({
+            "dataset": dataset_name,
+            "system": "PRISM",
+            "total": s.get("total"),
+            "q1_accuracy": s.get("q1_belief_accuracy"),
+            "q2_accuracy": s.get("q2_desire_accuracy"),
+            "q3_accuracy": s.get("q3_action_accuracy"),
+            "joint_accuracy": s.get("joint_accuracy"),
+            "debate_trigger_rate": s.get("debate_trigger_rate"),
+            "majority_vote_rate": s.get("majority_vote_rate"),
+            "avg_debate_rounds": s.get("avg_debate_rounds"),
+            "avg_rounds_debated": s.get("avg_debate_rounds_among_debated"),
+            "avg_elapsed_sec": s.get("avg_elapsed_sec"),
+            "total_elapsed_sec": s.get("total_elapsed_sec"),
+            "throughput_samples_per_hour": s.get("throughput_samples_per_hour"),
+            "total_prompt_tokens": s.get("total_prompt_tokens"),
+            "total_completion_tokens": s.get("total_completion_tokens"),
+            "total_cost_usd": s.get("total_cost_usd"),
+            "avg_cost_per_sample": s.get("avg_cost_per_sample"),
+        })
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\n  CSV saved: {csv_path}")
 
 
 def run_no_agent_ablation(config: dict, dataset_path: str, limit: int = None):
@@ -117,7 +232,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ToM Multi-Agent Debate System")
     parser.add_argument(
         "--mode",
-        choices=["single", "batch", "no_agent_ablation", "single_agent_ablation",
+        choices=["single", "batch", "full_batch", "no_agent_ablation", "single_agent_ablation",
                  "supervisor_ablation", "no_debate_ablation", "max_rounds_ablation", "eval"],
         default="single",
         help="실행 모드"
@@ -141,7 +256,9 @@ if __name__ == "__main__":
         run_supervisor_ablation(config, limit=args.limit)
     elif args.mode == "no_debate_ablation":
         run_no_debate_ablation(config, limit=args.limit)
-    elif args.mode == "max_rounds_ablation": 
+    elif args.mode == "full_batch":
+        run_full_batch(config, limit=args.limit)
+    elif args.mode == "max_rounds_ablation":
         run_max_rounds_ablation(config, limit=args.limit)
     elif args.mode == "eval":
         run_eval_only(config)

@@ -21,7 +21,11 @@ echo "OPENAI_API_KEY=your_api_key" > .env
 # 단일 자연어 입력 (터미널에서 직접 입력)
 python main.py --mode single
 
-# 배치 실험 (데이터셋 파일)
+# 배치 실험 — BigToM + HiToM 동시 실행
+python main.py --mode full_batch
+python main.py --mode full_batch --limit 10  # 테스트용 샘플 제한
+
+# 배치 실험 — 데이터셋 개별 실행
 python main.py --mode batch --dataset data/bigtom/bigtom.csv
 python main.py --mode batch --dataset data/hitom/Hi-ToM_data.json
 python main.py --mode batch --dataset data/bigtom/bigtom.csv --limit 10
