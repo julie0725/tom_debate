@@ -36,10 +36,17 @@ class BaseAgent(ABC):
         self.temperature = temperature 
 
     def _load_prompt(self) -> str:
-        prompt_path = Path(__file__).parent.parent / "prompts" / f"agent{self.agent_id}_prompt.txt"
-        if prompt_path.exists():
-            return prompt_path.read_text(encoding="utf-8")
-        logger.warning(f"Prompt file not found: {prompt_path}")
+        base = Path(__file__).parent.parent / "prompts"
+        persona_path = base / f"agent{self.agent_id}_persona_prompt.txt"
+        infer_path = base / f"agent{self.agent_id}_initial_infer_prompt.txt"
+        if persona_path.exists() and infer_path.exists():
+            persona = persona_path.read_text(encoding="utf-8")
+            infer = infer_path.read_text(encoding="utf-8")
+            return persona + "\n\n" + infer
+        fallback = base / f"agent{self.agent_id}_prompt.txt"
+        if fallback.exists():
+            return fallback.read_text(encoding="utf-8")
+        logger.warning(f"Prompt file not found for agent{self.agent_id}")
         return ""
 
     @abstractmethod

@@ -1,38 +1,12 @@
-You are an expert Belief State tracker for Theory of Mind (ToM) scenarios.
-Given a scenario log and target character, you will:
-(1) Infer each character's goal, (2) identify key propositions, (3) log belief updates per event,
-(4) summarize final belief state, (5) answer each question.
-
 INPUT
 Scenario:{scenario_text} | Characters:{character_list} | Target:{character_name}
 Goal hint:{character_goal} | Observers:{observation_info} | Questions:{questions_list} (list of {"id","text"} objects)
 
-RULES
-R1. Goal         — Use hint if given; otherwise infer from log only.
-R2. Propositions — Extract minimal proposition set before logging updates.
-R3. Access limit — Belief updates only from events directly seen, heard, or rationally inferable.
-R4. False speech — Lies update the listener's belief to the lie's content. Record world_fact and character_belief separately.
-R5. Credibility  — Unreliable speakers or contradicting evidence → confidence="low".
-R6. No-change    — Log every event even if belief unchanged; set changed=false with reason.
-R7. Initial state— Establish each character's t=0 belief before any event.
 R8. Answer       — For each question in the input questions list, add one entry to the root-level "tom_answers" list.
                Multiple-choice: value MUST be ONLY the single choice letter (e.g., "K"). No period, no text.
                Open-ended: value is a concise answer string.
                Also copy the primary answer into answer.response for compatibility.
 R9. Format       — Output ONE valid JSON object. No markdown or prose.
-R_STRUCT. If [STRUCTURED ToM STATE] is present:
-  - Use events[].observed_by as ground truth for epistemic access
-  - Use belief_states[] as starting point
-  - Cite events by id [Event N]
-  - Do NOT re-parse raw story text
-R_EVIDENCE. For every claim in your reasoning, cite the specific story event or sentence that supports it
-  (e.g., "[Event 3]" or quote the relevant sentence directly).
-  Do NOT make unsupported assertions. Every inference must trace back to observable story evidence.
-R10. Chain       — Simulate innermost agent first, outward. Each step's output feeds the next.
-R11. Projection ban — Do NOT project the target's info gap onto modeled agents.
-                Check each chain agent's presence at relevant events independently via belief_update_log.
-R12. Chain consistency — step[i].input_to_next must equal step[i].derived_belief.
-                Log violations in chain_consistency_errors.
 
 OUTPUT SCHEMA
 {

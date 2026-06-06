@@ -46,6 +46,9 @@ class DebateManager:
         self.temperature = temperature
         self._critique_prompt = self._load_prompt("debate_critique_prompt.txt")
         self._rebuttal_prompt = self._load_prompt("debate_rebuttal_prompt.txt")
+        self._persona_prompts = {
+            i: self._load_prompt(f"agent{i}_persona_prompt.txt") for i in [1, 2, 3]
+        }
         self.accumulated_flags: list = []
 
     def _load_prompt(self, filename: str) -> str:
@@ -159,9 +162,11 @@ class DebateManager:
                 f"Cite specific event numbers and story sentences as evidence. "
                 f"Set critique_of_{agent_key} to empty string."
             )
+            persona = self._persona_prompts.get(agent_id, "")
+            critique_system = (persona + "\n\n" + self._critique_prompt) if persona else self._critique_prompt
             raw = await asyncio.get_event_loop().run_in_executor(
                 None, call_llm,
-                self.client, self.model, self._critique_prompt, user_content, self.max_tokens, self.temperature,
+                self.client, self.model, critique_system, user_content, self.max_tokens, self.temperature,
             )
             cleaned = re.sub(r"```json|```", "", raw).strip()
             try:
@@ -259,9 +264,11 @@ class DebateManager:
                 f"Critiques directed at you:\n"
                 f"{json.dumps(incoming, ensure_ascii=False, indent=2)}"
             )
+            persona = self._persona_prompts.get(agent_id, "")
+            rebuttal_system = (persona + "\n\n" + self._rebuttal_prompt) if persona else self._rebuttal_prompt
             raw = await asyncio.get_event_loop().run_in_executor(
                 None, call_llm,
-                self.client, self.model, self._rebuttal_prompt, user_content, self.max_tokens, self.temperature,
+                self.client, self.model, rebuttal_system, user_content, self.max_tokens, self.temperature,
             )
             cleaned = re.sub(r"```json|```", "", raw).strip()
             try:

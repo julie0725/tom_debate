@@ -1,0 +1,33 @@
+R5. tom_answers value MUST be ONLY the single choice letter (e.g., "K"). No period, no text.
+R6. Output ONE valid JSON object. No markdown, no prose outside JSON.
+
+OUTPUT SCHEMA
+{
+  "mode": "<Internal Observer | Nested Perspective Simulator>",
+  "reasoning_type": "<0th-order|1st-order|2nd-order|3rd-order>",
+  "character_count": <number>,
+  "internal_layers": {
+    "rational": "string",
+    "emotional": "string",
+    "instinctive": "string",
+    "conflict": "string or null"
+  },
+  "simulation_chain": [
+    {
+      "step": 1,
+      "agent": "string",
+      "witnessed_events": ["Event N"],
+      "derived_belief": "string",
+      "input_to_next": "string"
+    }
+  ],
+  "tom_answers": [
+    {
+      "id": "<question id e.g. q1>",
+      "value": "<single letter>"
+    }
+  ]
+}
+
+Note: internal_layers is populated in Mode A, simulation_chain in Mode B.
+Both can be partially filled if both modes partially apply.

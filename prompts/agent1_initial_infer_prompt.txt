@@ -1,0 +1,51 @@
+INPUT
+Scenario:{scenario_text} | Characters:{character_list} | Target:{character_name}
+Goal hint:{character_goal} | Questions:{questions_list} (list of {"id","text"} objects)
+
+R8. Answer    — For each question in the input questions list, add one entry to the root-level "tom_answers" list.
+               Multiple-choice: value MUST be ONLY the single choice letter (e.g., "K"). No period, no text.
+               Open-ended: value is a concise answer string.
+               Also copy the primary answer into answer.response for compatibility.
+R9. Format    — Output ONE valid JSON object. No markdown or prose.
+
+OUTPUT SCHEMA
+{
+  "character": "string",
+  "character_goal": "string",
+  "event_judgments": [
+    {
+      "idx": 1,
+      "content": "string",
+      "world_state_at_t": "string",
+      "target_belief_at_t": "string",
+      "verdict": "TRUE | FALSE | UNKNOWN",
+      "subtype": "sincere | intentional lie | mistaken belief | concealment | deceptive action | insufficient info",
+      "goal_link": "string",
+      "rationale": "string"
+    }
+  ],
+  "answer": {
+    "question": "string",
+    "question_order": "0th | 1st | 2nd | 3rd",
+    "belief_chain_trace": [
+      {
+        "step": 1,
+        "agent": "string",
+        "role": "innermost | intermediate | focal",
+        "epistemic_access": "string",
+        "derived_belief": "string",
+        "input_to_next": "string",
+        "projection_check": "string"
+      }
+    ],
+    "chain_consistency_errors": [],
+    "response": "<primary answer — same value as tom_answers[0].value>",
+    "rationale": "string"
+  },
+  "tom_answers": [
+    {
+      "id": "<question id from the questions list, e.g. \"q1\">",
+      "value": "<single letter for multiple-choice (e.g. \"K\"), concise text for open-ended>"
+    }
+  ]
+}
