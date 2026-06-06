@@ -94,6 +94,13 @@ class Supervisor:
 
             state = self.pool.get_state()
             self.run_logger.log_agent_outputs(state.agent_outputs, label="initial")
+
+            # 초기 출력 freeze — 이후 토론이 덮어써도 보존됨
+            state.initial_agent_outputs = {
+                k: dict(v) if v else None
+                for k, v in state.agent_outputs.items()
+            }
+
             self.run_logger.log_context_file(asdict(state), label="after_initial_reasoning")
 
             agreement, _ = self.debate_manager._check_agreement(state)
@@ -152,9 +159,22 @@ class Supervisor:
         filtered_common = {
             "events": common.get("events", []),
             "characters": common.get("characters", []),
+            "belief_states": common.get("belief_states", []),
+            "goals": common.get("goals", []),
         }
 
         user_content = f"""Agents failed to reach consensus after {self.max_rounds} debate rounds.
+
+Scenario (full text):
+{state_dict.get("scenario", "")}
+
+Questions:
+{json.dumps(state_dict.get("questions", []), ensure_ascii=False, indent=2)}
+
+Reasoning type: {state_dict.get("reasoning_type", "unknown")}
+
+Structured ToM state (no answer information):
+{json.dumps(filtered_common, ensure_ascii=False, indent=2)}
 
 Debate flags (critique/rebuttal behavior per round):
 {json.dumps(flags or [], ensure_ascii=False, indent=2)}
@@ -162,15 +182,15 @@ Debate flags (critique/rebuttal behavior per round):
 Agent outputs (reasoning chains and answers):
 {json.dumps(filtered_outputs, ensure_ascii=False, indent=2)}
 
-Structured ToM state (observable facts — no answer information):
-{json.dumps(filtered_common, ensure_ascii=False, indent=2)}
-
 INSTRUCTIONS:
+- reasoning_type tells you what order of belief reasoning is required.
+  For 2nd-order or higher, the correct answer may require inferring what a character
+  believes about another character's belief — this is valid even if not directly observable.
 - agent_outputs.belief_state is each agent's own interpreted belief, not ground truth.
-  Evaluate only whether it is logically derivable from events[].observed_by.
+  Evaluate whether the reasoning chain is internally consistent and tracks epistemic access correctly.
   Do NOT confirm or infer the correct answer.
 - Use flags to identify which agents ignored critiques and which accepted them.
-- Identify whose reasoning is logically consistent with the observable evidence.
+- Identify whose reasoning correctly tracks each character's epistemic access given the scenario.
 - Provide correction guidance to help agents reach consensus through better reasoning.
 """
         correction = call_llm(

@@ -85,6 +85,12 @@ class ToMState:
         "agent2": None,
         "agent3": None
     })
+    # 토론 시작 전 초기 출력 (덮어쓰기 방지용 freeze)
+    initial_agent_outputs: dict = field(default_factory=lambda: {
+        "agent1": None,
+        "agent2": None,
+        "agent3": None
+    })
 
     # 토론 상태
     debate_round: int = 0
