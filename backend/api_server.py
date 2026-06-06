@@ -13,6 +13,11 @@ import logging
 import queue
 import threading
 from typing import AsyncGenerator
+import uuid
+from collections import defaultdict
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import yaml
 from fastapi import FastAPI
@@ -27,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 def load_config(path: str = "config/config.yaml") -> dict:
-    with open(path, encoding="utf-8") as f:
+    base = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(base, "..", path), encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -40,7 +46,7 @@ app.add_middleware(
 )
 
 config = load_config()
-
+session_queues: dict[str, queue.Queue] = {}
 
 class RunRequest(BaseModel):
     scenario: str
@@ -53,8 +59,15 @@ def sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def run_pipeline_sse(scenario: str, question: str, question2: str = "", question3: str = "") -> AsyncGenerator[str, None]:
+async def run_pipeline_sse(scenario: str, question: str, question2: str = "", question3: str = "", session_id: str = "") -> AsyncGenerator[str, None]:
     q: queue.Queue = queue.Queue()
+
+    eq = session_queues.get(session_id)
+
+    def event_callback(event: str, data: dict):
+        if eq is not None:
+            eq.put((event, data))
+
     loop = asyncio.get_event_loop()
 
     def progress_callback(message: str, pct: int):
@@ -64,6 +77,7 @@ async def run_pipeline_sse(scenario: str, question: str, question2: str = "", qu
         try:
             ai_user = AIUser(config=config)
             ai_user.progress_callback = progress_callback
+            ai_user.event_callback = event_callback
             metadata = {}
             if question2.strip():
                 metadata["q2"] = question2.strip()
@@ -101,12 +115,38 @@ async def run_pipeline_sse(scenario: str, question: str, question2: str = "", qu
 
 @app.post("/run")
 async def run(req: RunRequest):
-    return StreamingResponse(
-        run_pipeline_sse(req.scenario, req.question, req.question2, req.question3),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    session_id = str(uuid.uuid4())
+    session_queues[session_id] = queue.Queue()
 
+    async def _stream():
+        yield sse("session", {"session_id": session_id})
+        async for chunk in run_pipeline_sse(req.scenario, req.question, req.question2, req.question3, session_id):
+            yield chunk
+        session_queues.pop(session_id, None)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+@app.get("/debate-stream/{session_id}")
+async def debate_stream(session_id: str):
+    async def _stream():
+        if session_id not in session_queues:
+            yield sse("error", {"message": "session not found"})
+            return
+        eq = session_queues[session_id]
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                event, data = await loop.run_in_executor(None, lambda: eq.get(timeout=120))
+                yield sse(event, data)
+                if event in ("done", "error"):
+                    break
+            except queue.Empty:
+                yield sse("error", {"message": "timeout"})
+                break
+
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.get("/health")
 def health():

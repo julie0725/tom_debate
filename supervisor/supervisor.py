@@ -60,6 +60,7 @@ class Supervisor:
             )
 
         self.client = get_llm_client(provider=self.provider, base_url=self.base_url)
+        self.event_callback = None
         self.debate_manager = DebateManager(
             agents=self.agents,
             max_rounds=self.max_rounds,
@@ -68,6 +69,7 @@ class Supervisor:
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
+            event_callback=self.event_callback,
         )
         self.correction_prompt = self._load_correction_prompt()
 
@@ -79,6 +81,7 @@ class Supervisor:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     async def run(self) -> ToMState:
+        self.debate_manager.event_callback = self.event_callback or (lambda e, d: None)
         state = self.pool.get_state()
         if state is None:
             raise ValueError("No context file in message pool.")
@@ -91,6 +94,14 @@ class Supervisor:
 
         try:
             agent_outputs = await self._run_agents_parallel(state)
+            if self.event_callback:
+                self.event_callback("agent_answer", {
+                    "answers": {
+                        f"agent{aid}": [{"id": a.get("id"), "value": a.get("value")}
+                                        for a in (out or {}).get("tom_answers", [])]
+                        for aid, out in agent_outputs.items()
+                    }
+                })
             self.progress_callback("에이전트 추론 완료", 40)  # hook
             for agent_id, output in agent_outputs.items():
                 self.pool.update_agent_output(agent_id, output)

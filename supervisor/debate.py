@@ -36,6 +36,7 @@ class DebateManager:
         model: str = "gpt-3.5-turbo",
         max_tokens: int = 2000,
         temperature: float = 0.0,
+        event_callback=None,
     ):
         self.agents = agents
         self.max_rounds = max_rounds
@@ -50,6 +51,7 @@ class DebateManager:
             i: self._load_prompt(f"agent{i}_persona_prompt.txt") for i in [1, 2, 3]
         }
         self.accumulated_flags: list = []
+        self.event_callback = event_callback or (lambda event, data: None)
 
     def _load_prompt(self, filename: str) -> str:
         p = Path(__file__).parent.parent / "prompts" / filename
@@ -74,14 +76,37 @@ class DebateManager:
             outputs_before = copy.deepcopy(state.agent_outputs)
 
             critiques = await self._run_critique_phase(pool, round_num, run_logger)
+            self.event_callback("critique", {
+                "round": round_num,
+                "critiques": {
+                    src: {tgt: out.get(f"critique_of_{tgt}", "")
+                          for tgt in [f"agent{i}" for i in self.agents] if tgt != src}
+                    for src, out in critiques.items()
+                },
+                "answers_before": {
+                    f"agent{aid}": [{"id": a.get("id"), "value": a.get("value")}
+                                    for a in (outputs_before.get(f"agent{aid}") or {}).get("tom_answers", [])]
+                    for aid in self.agents
+                },
+            })
             self._print_critique_phase(round_num, critiques)
 
             rebuttal_results = await self._run_rebuttal_phase(pool, round_num, critiques, run_logger)
+            state = pool.get_state()
+            self.event_callback("rebuttal", {
+                "round": round_num,
+                "answers_after": {
+                    f"agent{aid}": [{"id": a.get("id"), "value": a.get("value")}
+                                    for a in (state.agent_outputs.get(f"agent{aid}") or {}).get("tom_answers", [])]
+                    for aid in self.agents
+                },
+                "rebuttals": {f"agent{aid}": out.get("rebuttal", "") for aid, out in rebuttal_results},
+            })
+            agreement, answer_map = self._check_agreement(state)
+            self.event_callback("consensus", {"round": round_num, "agreement": agreement, "answer_map": answer_map})
             self._print_rebuttal_phase(round_num, rebuttal_results)
             self._accumulate_flags(critiques, rebuttal_results, outputs_before, round_num)
 
-            state = pool.get_state()
-            agreement, answer_map = self._check_agreement(state)
             self._print_round_result(round_num, {"agreement": agreement, "answer_map": answer_map})
             logger.info(f"[Debate] Round {round_num} agreement={agreement}")
 
@@ -117,7 +142,6 @@ class DebateManager:
 
         pool.update_debate_context({}) # after supervisor correction, clear the round-specific context to avoid confusion in the fresh re-reasoning step
         await self._re_reason_fresh(pool)
-
         state = pool.get_state()
         agreement, answer_map = self._check_agreement(state)
 

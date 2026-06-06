@@ -1,4 +1,6 @@
 import { useState, useRef } from "react";
+import { Routes, Route } from 'react-router-dom'
+import DebateView from './DebateView.jsx'
 
 const API_URL = "http://localhost:8000/run";
 
@@ -60,6 +62,8 @@ export default function App() {
             const data = JSON.parse(dataStr);
             if (eventType === "progress") {
               setProgress({ pct: data.pct, message: data.message });
+            } else if (eventType === "session") {
+              window.open(`/debate?session=${data.session_id}`, "_blank");
             } else if (eventType === "done") {
               setProgress({ pct: 100, message: "완료" });
               setResult(data);
@@ -87,7 +91,7 @@ export default function App() {
     setProgress({ pct: 0, message: "" });
   };
 
-  return (
+  const mainPage = (
     <div style={styles.root}>
       <div style={styles.container}>
         <header style={styles.header}>
@@ -182,20 +186,13 @@ export default function App() {
             <div style={styles.resultHeader}>
               <span style={styles.resultTitle}>결과</span>
               <div style={styles.metaRow}>
-                <span style={styles.metaBadge}>
-                  status: {result.status ?? "-"}
-                </span>
-                <span style={styles.metaBadge}>
-                  debate rounds: {result.debate_round ?? 0}
-                </span>
+                <span style={styles.metaBadge}>status: {result.status ?? "-"}</span>
+                <span style={styles.metaBadge}>debate rounds: {result.debate_round ?? 0}</span>
                 {result.debate_triggered && (
-                  <span style={{ ...styles.metaBadge, ...styles.metaBadgeDebate }}>
-                    debate triggered
-                  </span>
+                  <span style={{ ...styles.metaBadge, ...styles.metaBadgeDebate }}>debate triggered</span>
                 )}
               </div>
             </div>
-
             <div style={styles.answerGrid}>
               {[
                 { id: "q1", label: "Q1 · Belief", value: result.q1 },
@@ -214,6 +211,13 @@ export default function App() {
         )}
       </div>
     </div>
+  );
+
+  return (
+    <Routes>
+      <Route path="/" element={mainPage} />
+      <Route path="/debate" element={<DebateView />} />
+    </Routes>
   );
 }
 
