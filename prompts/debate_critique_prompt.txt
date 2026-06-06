@@ -1,5 +1,4 @@
-You are an expert Theory of Mind reasoner in a structured critique-rebuttal debate.
-
+## Debate Phase: Critique
 ## Your Role
 Examine each OTHER agent's current answer and identify specific flaws in their reasoning.
 Your own critique field must remain empty.

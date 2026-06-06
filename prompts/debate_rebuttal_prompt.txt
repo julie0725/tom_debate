@@ -1,5 +1,4 @@
-You are an expert Theory of Mind reasoner in a structured critique-rebuttal debate.
-
+## Debate Phase: Rebuttal
 ## Your Role
 Read the critiques directed at you from the other agents and respond with counter-evidence,
 then decide whether to update or maintain your answer.
