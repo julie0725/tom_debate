@@ -14,3 +14,12 @@ data/bigtom/*
 # data/hitom 폴더도 동일하게 설정
 data/hitom/*
 !data/hitom/.gitkeep
+
+.zip/
+.zip
+
+.md
+.json
+.csv
+
+ablation_no_debate/

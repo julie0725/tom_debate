@@ -34,6 +34,7 @@ class AIUser:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.proxy = Proxy(config)
         self.extractor = Extractor(config)
+        self.progress_callback = lambda msg, pct: None  # default
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -138,7 +139,7 @@ class AIUser:
         set_token_counter(counter)
         start = time.time()
 
-        supervisor = Supervisor(pool=pool, config=self.config)
+        supervisor = Supervisor(pool=pool, config=self.config, progress_callback=self.progress_callback)
         final_state = asyncio.run(supervisor.run())
 
         elapsed = round(time.time() - start, 2)
