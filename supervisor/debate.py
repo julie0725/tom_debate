@@ -220,22 +220,27 @@ class DebateManager:
 
         results = await asyncio.gather(*[rebuttal_one(aid) for aid in agent_ids])
 
-        # Merge revised my_answer back into each agent's tom_answers (q1)
+        # Merge revised answers back into each agent's tom_answers (all questions)
         for agent_id, rebuttal_out in results:
             agent_key = f"agent{agent_id}"
-            new_letter = _extract_choice_letter(rebuttal_out.get("my_answer", ""))
-            if new_letter:
+            my_answers = rebuttal_out.get("my_answers") or []
+            if not my_answers:
+                letter = _extract_choice_letter(rebuttal_out.get("my_answer", ""))
+                if letter:
+                    my_answers = [{"id": "q1", "value": letter}]
+            if my_answers:
                 current = dict(state.agent_outputs.get(agent_key) or {})
                 tom = list(current.get("tom_answers") or [])
-                updated = False
-                for entry in tom:
-                    if entry.get("id") == "q1":
-                        entry["value"] = new_letter
-                        updated = True
-                        break
-                if not updated:
-                    tom = [{"id": "q1", "value": new_letter}] + tom
-                pool.update_agent_output(agent_id, {**current, "tom_answers": tom})
+                tom_map = {e.get("id"): e for e in tom}
+                for new_ans in my_answers:
+                    qid = new_ans.get("id")
+                    val = _extract_choice_letter(new_ans.get("value", ""))
+                    if qid and val:
+                        if qid in tom_map:
+                            tom_map[qid]["value"] = val
+                        else:
+                            tom_map[qid] = {"id": qid, "value": val}
+                pool.update_agent_output(agent_id, {**current, "tom_answers": list(tom_map.values())})
 
         # Combined context carries both phases so the logger can render the full transcript
         context = {
@@ -332,12 +337,15 @@ class DebateManager:
 
         def vote_for(q_id: str) -> str:
             votes = [
-                _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
-                for out in outputs
-                if out and out.get("tom_answers") is not None
+                v for v in (
+                    _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
+                    for out in outputs
+                    if out and out.get("tom_answers") is not None
+                )
+                if v
             ]
             if not votes:
-                return ""
+                return "unknown"
             counter = Counter(votes)
             top = counter.most_common()
             if len(top) == 1 or top[0][1] > top[1][1]:
@@ -417,7 +425,7 @@ class DebateManager:
             tom_ans = output.get("tom_answers") or []
             if tom_ans:
                 return ToMAnswers(answers=[
-                    {"id": a["id"], "value": _extract_choice_letter(a["value"])}
+                    {"id": a["id"], "value": _extract_choice_letter(a["value"]) or "unknown"}
                     for a in tom_ans if a.get("id") and a.get("value")
                 ])
         return ToMAnswers()

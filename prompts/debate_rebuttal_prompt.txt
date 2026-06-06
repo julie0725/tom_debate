@@ -22,11 +22,16 @@ Then state your final answer.
 R1. Cite specific timeline events by number (e.g., "[Event 3]") for every counter-claim
 R2. Do not dismiss critiques without evidence — every rebuttal must be grounded in the scenario
 R3. If multiple critiques conflict with each other, address each one separately
-R4. my_answer — ONLY the single choice letter (e.g., "K"). No period, no text, no explanation.
+R4. my_answers — for EVERY question in the input, include one entry with ONLY the single choice letter (e.g., "K"). No period, no text, no explanation.
 R5. Output ONE valid JSON object. No markdown, no prose outside the JSON.
 
 ## OUTPUT FORMAT
 {
   "rebuttal": "<your counter-argument with event citations>",
-  "my_answer": "<single letter>"
+  "my_answers": [
+    {"id": "q1", "value": "<single letter>"},
+    {"id": "q2", "value": "<single letter>"},
+    {"id": "q3", "value": "<single letter>"}
+  ]
 }
+Note: include only the question ids that appear in the input Questions list.
