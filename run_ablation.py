@@ -50,13 +50,13 @@ logger = logging.getLogger(__name__)
 
 # ── 데이터셋 경로 매핑 ────────────────────────────────────────────────────────
 DATASET_PATHS = {
-    "hitom":  "data/hitom/Hi-ToM_data.json",
+    "hitom":  "data/hitom/Hi-ToM_data_raw.json",
     "bigtom": "data/bigtom/bigtom.csv",
 }
 
 # sampling_dataset.py가 기대하는 raw → sampled 경로
 RAW_PATHS = {
-    "hitom":  ("data/hitom/Hi-ToM_data_raw.json", "data/hitom/Hi-ToM_data.json"),
+    "hitom":  ("data/hitom/Hi-ToM_data_raw.json", "data/hitom/Hi-ToM_data_raw.json"),
     "bigtom": ("data/bigtom/bigtom_raw.csv",       "data/bigtom/bigtom.csv"),
 }
 
@@ -226,19 +226,11 @@ def run_condition(
     dataset: str,
     skip_sampling: bool = False,
     resume: bool = False,
-    limit=None
+    limit=None,
+    tail=None,
 ) -> dict:
-    # 1. 샘플링
-    run_sampling(dataset, skip_if_exists=skip_sampling)
 
     dataset_path = DATASET_PATHS[dataset]
-    spec = ABLATION_CONDITIONS[condition]
-
-    print("\n" + "=" * 60)
-    print(f"  Condition  : {condition}  ({spec['name']})")
-    print(f"  {spec['description']}")
-    print(f"  Dataset    : {dataset_path}  ({dataset})")
-    print("=" * 60 + "\n")
 
     # 2. config 구성
     cfg = apply_overrides(load_config(config_path), condition)
@@ -247,7 +239,7 @@ def run_condition(
     cfg.setdefault("evaluation", {})["output_dir"] = str(out_dir) + "/"
 
     # 3. 파이프라인 실행
-    AblationAIUser(config=cfg).submit_from_dataset(dataset_path, limit=limit)
+    AblationAIUser(config=cfg).submit_from_dataset(dataset_path, limit=limit, tail=tail)
 
     results_file = cfg["evaluation"].get("results_file", "results.jsonl")
 
@@ -292,7 +284,8 @@ if __name__ == "__main__":
                         help="샘플 파일이 이미 있으면 재샘플링 건너뜀")
     parser.add_argument("--resume", action="store_true",
                         help="기존 jsonl 결과를 유지하고 미완료 task만 이어서 실행")
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--limit", type=int, default=None, help="앞에서 N개")
+    parser.add_argument("--tail",  type=int, default=None, help="뒤에서 N개")
     args = parser.parse_args()
 
     result = run_condition(
