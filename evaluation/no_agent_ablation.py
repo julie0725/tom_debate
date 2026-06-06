@@ -134,7 +134,9 @@ class AblationRunner:
             summary = evaluator.evaluate_from_jsonl(
                 results_file=results_filename,
                 output_file=summary_filename,
-            )   
+                dataset_name=dataset_name,
+                condition=condition["name"],
+            )
 
             all_results[condition["name"]] = {
                 "description": condition["description"],
