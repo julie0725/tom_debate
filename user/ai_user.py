@@ -83,6 +83,8 @@ class AIUser:
             results_path.unlink()
 
         tasks = list(self.proxy.get_tasks(path, limit))
+        for task in tasks:
+            task.metadata.setdefault("dataset_type", dataset_stem)
 
         if not tasks:
             logger.error(f"[AIUser] No samples loaded from: {path}")
