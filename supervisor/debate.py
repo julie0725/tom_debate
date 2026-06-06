@@ -97,6 +97,12 @@ class DebateManager:
                 logger.info(f"[Debate] Consensus reached at round {round_num}")
                 return self._extract_answer_from_state(state)
 
+            # 소수가 반박한 뒤 다수가 재비판하는 추가 턴 없음 — 소수가 마지막 발언
+            _, minority_keys = self._split_majority_minority(state)
+            if minority_keys:
+                logger.info("[Debate] Minority spoke last — stopping debate to prevent further pressure.")
+                break
+
         logger.info("[Debate] Max rounds reached. Re-reasoning from scratch...")
 
         if supervisor_correction_fn:
@@ -135,16 +141,22 @@ class DebateManager:
         state_dict = asdict(state)
         agent_ids = list(self.agents.keys())
 
+        # Blind critique: hide tom_answers to prevent sycophancy
+        blind_outputs = {
+            ak: {k: v for k, v in (out or {}).items() if k != "tom_answers"}
+            for ak, out in state_dict["agent_outputs"].items()
+        }
+
         async def critique_one(agent_id: int) -> tuple[int, dict]:
             agent_key = f"agent{agent_id}"
             user_content = (
                 f"You are agent{agent_id}.\n\n"
                 f"Scenario:\n{state_dict['scenario']}\n\n"
                 f"Questions:\n{json.dumps(state_dict['questions'], ensure_ascii=False)}\n\n"
-                f"All agents' current outputs:\n"
-                f"{json.dumps(state_dict['agent_outputs'], ensure_ascii=False, indent=2)}\n\n"
+                f"All agents' current reasoning (final answers hidden):\n"
+                f"{json.dumps(blind_outputs, ensure_ascii=False, indent=2)}\n\n"
                 f"Critique the reasoning of every agent EXCEPT yourself. "
-                f"Cite specific event numbers as evidence. "
+                f"Cite specific event numbers and story sentences as evidence. "
                 f"Set critique_of_{agent_key} to empty string."
             )
             raw = await asyncio.get_event_loop().run_in_executor(
@@ -180,6 +192,22 @@ class DebateManager:
 
     # ── Phase 2: Rebuttal ─────────────────────────────────────────────────────
 
+    def _split_majority_minority(self, state: ToMState) -> tuple[list, list]:
+        """Returns (majority_agent_keys, minority_agent_keys) by q1 vote."""
+        votes = {}
+        for agent_key, output in state.agent_outputs.items():
+            if not output:
+                continue
+            val = _extract_choice_letter(get_answer_value(output.get("tom_answers"), "q1"))
+            if val:
+                votes[agent_key] = val
+        if len(set(votes.values())) <= 1:
+            return list(votes.keys()), []
+        majority_answer = Counter(votes.values()).most_common(1)[0][0]
+        majority = [k for k, v in votes.items() if v == majority_answer]
+        minority = [k for k in votes if k not in majority]
+        return majority, minority
+
     async def _run_rebuttal_phase(
         self, pool: MessagePool, round_num: int, critiques: dict, run_logger=None
     ) -> None:
@@ -188,14 +216,40 @@ class DebateManager:
         state_dict = asdict(state)
         agent_ids = list(self.agents.keys())
 
+        majority_keys, minority_keys = self._split_majority_minority(state)
+
         async def rebuttal_one(agent_id: int) -> tuple[int, dict]:
             agent_key = f"agent{agent_id}"
-            incoming = {
-                critic_key: c_out.get(f"critique_of_{agent_key}", "")
-                for critic_key, c_out in critiques.items()
-                if critic_key != agent_key
-                and c_out.get(f"critique_of_{agent_key}")
-            }
+
+            # 소수 에이전트: 다수 측 critique를 하나로 합산해 전달 (개별 압박 제거)
+            if agent_key in minority_keys and majority_keys:
+                majority_critiques = [
+                    critiques[mk].get(f"critique_of_{agent_key}", "")
+                    for mk in majority_keys
+                    if critiques.get(mk, {}).get(f"critique_of_{agent_key}")
+                ]
+                if majority_critiques:
+                    merged = "Majority position:\n" + "\n\n".join(majority_critiques)
+                    incoming = {"majority": merged}
+                else:
+                    incoming = {}
+            else:
+                # 다수 에이전트: 소수 측 critique만 수신
+                incoming = {
+                    critic_key: c_out.get(f"critique_of_{agent_key}", "")
+                    for critic_key, c_out in critiques.items()
+                    if critic_key != agent_key
+                    and critic_key in minority_keys
+                    and c_out.get(f"critique_of_{agent_key}")
+                }
+                # 소수가 없으면 전체 critique 수신 (fallback)
+                if not incoming:
+                    incoming = {
+                        critic_key: c_out.get(f"critique_of_{agent_key}", "")
+                        for critic_key, c_out in critiques.items()
+                        if critic_key != agent_key
+                        and c_out.get(f"critique_of_{agent_key}")
+                    }
             user_content = (
                 f"You are agent{agent_id}.\n\n"
                 f"Scenario:\n{state_dict['scenario']}\n\n"
@@ -307,6 +361,14 @@ class DebateManager:
         state = pool.get_state()
         state_dict = asdict(state)
 
+        # 토론 오염 제거: 초기 출력과 빈 debate_context로 재추론
+        if state.initial_agent_outputs:
+            state_dict["agent_outputs"] = {
+                k: dict(v) if v else None
+                for k, v in state.initial_agent_outputs.items()
+            }
+        state_dict["debate_context"] = {}
+
         async def re_reason_agent(agent_id, agent):
             loop = asyncio.get_event_loop()
             output = await loop.run_in_executor(None, agent.reason, state_dict)
@@ -336,18 +398,27 @@ class DebateManager:
             q_ids = ["q1"]
 
         def vote_for(q_id: str) -> str:
-            votes = [
-                v for v in (
-                    _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
-                    for out in outputs
-                    if out and out.get("tom_answers") is not None
+            # 가중치 투표: 초기 답변 유지 → 가중치 1.0, 바꿈 → 0.5 (쉽게 흔들린 agent 신뢰도 감소)
+            weighted: dict[str, float] = {}
+            for i in [1, 2, 3]:
+                agent_key = f"agent{i}"
+                out = state.agent_outputs.get(agent_key)
+                if not out or out.get("tom_answers") is None:
+                    continue
+                val = _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
+                if not val:
+                    continue
+                initial_out = (state.initial_agent_outputs or {}).get(agent_key)
+                initial_val = (
+                    _extract_choice_letter(get_answer_value(initial_out.get("tom_answers"), q_id))
+                    if initial_out else ""
                 )
-                if v
-            ]
-            if not votes:
+                weight = 1.0 if (initial_val and initial_val == val) else 0.5
+                weighted[val] = weighted.get(val, 0.0) + weight
+
+            if not weighted:
                 return "unknown"
-            counter = Counter(votes)
-            top = counter.most_common()
+            top = sorted(weighted.items(), key=lambda x: x[1], reverse=True)
             if len(top) == 1 or top[0][1] > top[1][1]:
                 return top[0][0]
             tiebreak = state.agent_outputs.get(f"agent{self.tiebreak_agent}")

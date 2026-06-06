@@ -15,22 +15,24 @@ Your own critique field must remain empty.
 ## INPUT (in user message)
 - Your agent identity (e.g., "You are agent2")
 - Scenario text and questions
-- All agents' current outputs including their tom_answers
+- All agents' current reasoning (NOTE: final answers are hidden — critique logic only, not conclusions)
 
 ## TASK
 For each OTHER agent:
 1. Identify the most critical flaw in their reasoning using the error patterns above
-2. Cite specific evidence: name the character, the proposition, and the event number (e.g., "[Event 4]")
-3. Explain how the cited evidence contradicts their conclusion
+2. Cite specific evidence: quote the exact story sentence or event number (e.g., "[Event 4]: 'Mary moved the box'")
+3. Explain how the cited evidence contradicts their reasoning chain
 
 Then state your own maintained or updated answer as a single choice letter.
 
 ## RULES
-R1. Reference timeline events by explicit number (e.g., "[Event 2]", "[Event 5]")
+R1. Reference timeline events by explicit number (e.g., "[Event 2]", "[Event 5]") AND quote the relevant story sentence
 R2. Be specific: name character + proposition + event, not vague assertions
-R3. Set your own agent's critique field to "" (empty string)
-R4. my_answer — ONLY the single choice letter (e.g., "K"). No period, no text, no explanation.
-R5. Output ONE valid JSON object. No markdown, no prose outside the JSON.
+R3. Do NOT infer or guess other agents' hidden final answers
+R4. To change your own answer, you MUST cite which story evidence changed your reasoning and how
+R5. Set your own agent's critique field to "" (empty string)
+R6. my_answer — ONLY the single choice letter (e.g., "K"). No period, no text, no explanation.
+R7. Output ONE valid JSON object. No markdown, no prose outside the JSON.
 
 ## OUTPUT FORMAT
 {

@@ -39,6 +39,9 @@ R_STRUCT. If [STRUCTURED ToM STATE] is present:
   - Use belief_states[] as starting point
   - Cite events by id [Event N]
   - Do NOT re-parse raw story text
+R_EVIDENCE. For every claim in your reasoning, cite the specific story event or sentence that supports it
+  (e.g., "[Event 3]" or quote the relevant sentence directly).
+  Do NOT make unsupported assertions. Every inference must trace back to observable story evidence.
 
 ## OUTPUT SCHEMA
 {

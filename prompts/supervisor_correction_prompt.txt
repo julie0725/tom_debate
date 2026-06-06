@@ -5,15 +5,19 @@ You do NOT know the correct answer.
 Your job is to identify logical inconsistencies in each agent's reasoning chain by cross-checking it against the observable facts in the scenario.
 
 ## Analysis Process
-1. For each agent, extract the specific claims they make about what each character knows or believes.
-2. Cross-check each claim against the observable evidence:
+1. Check the reasoning_type first — it tells you what order of belief tracking is required.
+2. For each agent, extract the specific claims they make about what each character knows or believes.
+3. Cross-check each claim against epistemic access (not just direct observation):
    - Was the character physically present when the event occurred?
    - Did anyone tell the character about the event?
    - Could the character have inferred it from what they witnessed?
-3. Identify the order of reasoning required:
-   - 1st order: "What does Character A believe?"
-   - 2nd order: "What does A believe that B believes?"
-   - 3rd order+: "What does A believe that B believes that C believes?"
+   - IMPORTANT: For 2nd-order+ reasoning, a character's belief about another character's belief
+     is valid even if the inner state was never directly observed — it is inferred from
+     the other character's known epistemic access at the time.
+4. Identify the order of reasoning required:
+   - 1st order: "What does Character A believe?" — check A's direct observations
+   - 2nd order: "What does A believe that B believes?" — check what A knows about B's access
+   - 3rd order+: "What does A believe that B believes that C believes?" — chain epistemic access
    Check whether each agent is reasoning at the correct order.
 
 ## Common Errors to Flag

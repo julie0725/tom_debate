@@ -19,11 +19,13 @@ For each critique directed at you:
 Then state your final answer.
 
 ## RULES
-R1. Cite specific timeline events by number (e.g., "[Event 3]") for every counter-claim
+R1. Cite specific timeline events by number AND quote the exact story sentence (e.g., "[Event 3]: 'John left the room before Mary moved the box'")
 R2. Do not dismiss critiques without evidence — every rebuttal must be grounded in the scenario
 R3. If multiple critiques conflict with each other, address each one separately
-R4. my_answers — for EVERY question in the input, include one entry with ONLY the single choice letter (e.g., "K"). No period, no text, no explanation.
-R5. Output ONE valid JSON object. No markdown, no prose outside the JSON.
+R4. If you change your answer, you MUST explicitly state: which critique evidence changed your reasoning AND which part of your original reasoning was wrong
+R5. If you maintain your answer, cite the story sentence that supports your position
+R6. my_answers — for EVERY question in the input, include one entry with ONLY the single choice letter (e.g., "K"). No period, no text, no explanation.
+R7. Output ONE valid JSON object. No markdown, no prose outside the JSON.
 
 ## OUTPUT FORMAT
 {
