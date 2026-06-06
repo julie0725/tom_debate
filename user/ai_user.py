@@ -140,6 +140,7 @@ class AIUser:
         start = time.time()
 
         supervisor = Supervisor(pool=pool, config=self.config, progress_callback=self.progress_callback)
+        supervisor.event_callback = getattr(self, "event_callback", None)
         final_state = asyncio.run(supervisor.run())
 
         elapsed = round(time.time() - start, 2)
