@@ -76,7 +76,7 @@ def run_batch(config: dict, dataset_path: str, limit: int = None, dataset_name: 
     output_file = results_file.replace("results_", "evaluation_").replace(".jsonl", ".json")
 
     evaluator = Evaluator(output_dir=config["evaluation"]["output_dir"])
-    return evaluator.evaluate_from_jsonl(results_file=results_file, output_file=output_file, dataset_name=dataset_name, silent=True)
+    return evaluator.evaluate_from_jsonl(results_file=results_file, output_file=output_file, dataset_name=dataset_name, condition="PRISM")
 
 
 def run_full_batch(config: dict, limit: int = None):
@@ -150,6 +150,10 @@ def _print_prism_final_table(all_results: dict) -> None:
         print("=" * W)
 
 
+def _none_to_empty(row: dict) -> dict:
+    return {k: ("" if v is None else v) for k, v in row.items()}
+
+
 def _save_prism_csv(all_results: dict, output_dir: str = "outputs/prism_result/") -> None:
     csv_path = Path(output_dir) / "prism_results.csv"
     fieldnames = [
@@ -165,7 +169,7 @@ def _save_prism_csv(all_results: dict, output_dir: str = "outputs/prism_result/"
     for dataset_name, s in all_results.items():
         if not s:
             continue
-        rows.append({
+        rows.append(_none_to_empty({
             "dataset": dataset_name,
             "system": "PRISM",
             "total": s.get("total"),
@@ -184,12 +188,12 @@ def _save_prism_csv(all_results: dict, output_dir: str = "outputs/prism_result/"
             "total_completion_tokens": s.get("total_completion_tokens"),
             "total_cost_usd": s.get("total_cost_usd"),
             "avg_cost_per_sample": s.get("avg_cost_per_sample"),
-        })
+        }))
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"\n  CSV saved: {csv_path}")
+    print(f"\n  Results CSV : {csv_path}")
 
 
 def run_no_agent_ablation(config: dict, dataset_path: str, limit: int = None):
