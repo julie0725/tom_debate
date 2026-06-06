@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class Supervisor:
-    def __init__(self, pool: MessagePool, config: dict):
+    def __init__(self, pool: MessagePool, config: dict, progress_callback=None):
         self.pool = pool
         self.config = config
 
@@ -35,6 +35,8 @@ class Supervisor:
         self.use_debate = config.get("debate", {}).get("use_debate", True)
         self.tiebreak_agent = config.get("debate", {}).get("tiebreak_agent", 3)
         self.use_correction = config.get("supervisor", {}).get("use_correction", True)
+
+        self.progress_callback = progress_callback or (lambda msg, pct: None)
 
         agent_cfg = config.get("agents", {})
         self.agents = {}
@@ -89,6 +91,7 @@ class Supervisor:
 
         try:
             agent_outputs = await self._run_agents_parallel(state)
+            self.progress_callback("에이전트 추론 완료", 40)  # hook
             for agent_id, output in agent_outputs.items():
                 self.pool.update_agent_output(agent_id, output)
 
@@ -110,22 +113,26 @@ class Supervisor:
                 final = self.debate_manager._extract_answer_from_state(state)
                 self.pool.set_final_answer(final)
                 logger.info("[Supervisor] Agreement reached. No debate needed.")
+                self.progress_callback("합의 완료", 80)  # hook
             else:
                 state = self.pool.get_state()
                 state.debate_triggered = True
                 self.pool.update_status("debating")
                 logger.info("[Supervisor] Disagreement detected. Starting debate.")
                 correction_fn = self._call_supervisor_correction if self.use_correction else None
+                self.progress_callback("토론 시작", 50)  # hook
                 final = await self.debate_manager.run_debate(
                     pool=self.pool,
                     supervisor_correction_fn=correction_fn,
                     run_logger=self.run_logger
                 )
+                self.progress_callback("토론 완료", 80)  # hook
                 self.pool.set_final_answer(final)
         finally:
             final_state = self.pool.get_state()
             self.run_logger.log_context_file(asdict(final_state), label="final")
             self.run_logger.log_final_summary(asdict(final_state))
+            self.progress_callback("완료", 100)  # hook
 
         return final_state
 

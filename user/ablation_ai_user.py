@@ -11,11 +11,12 @@ E / F / G 조건 라우팅 AIUser 확장.
 import asyncio
 import logging
 from dataclasses import asdict
-
+from pathlib import Path
 from core.context_file import ToMState, ToMAnswers
 from core.message_pool import get_message_pool, reset_message_pool
 from core.tom_task import ToMTask
 from user.ai_user import AIUser
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +133,26 @@ class AblationAIUser(AIUser):
         # 기존 _save_result() 그대로 호출
         self._save_result(state)
         return state
+
+    def submit_from_dataset(self, path, limit=None, tail=None):
+        dataset_stem = Path(path).stem
+        results_file = f"results_{dataset_stem}.jsonl"
+        self.config.setdefault("evaluation", {})["results_file"] = results_file
+
+        results_path = self.output_dir / results_file
+        if results_path.exists():
+            results_path.unlink()
+
+        tasks = list(self.proxy.get_tasks(path))
+        if tail is not None:
+            tasks = tasks[-tail:]
+        elif limit is not None:
+            tasks = tasks[:limit]
+
+        print(f"data 개수 : {len(tasks)}")
+        for i, task in enumerate(tasks):
+            logger.info(f"[AblationAIUser] {i+1}/{len(tasks)} | id={task.dataset_id}")
+            try:
+                self._submit(task)
+            except Exception as e:
+                logger.error(f"[AblationAIUser] {task.dataset_id} failed: {e}")
