@@ -2,6 +2,66 @@
 
 ---
 
+## [12] _accumulate_flags — my_answer 단수 필드 버그 수정
+
+### 기존 문제
+
+- `_accumulate_flags`가 `rebuttal_out.get("my_answer", "")` (단수 필드)로 답변 변경 여부를 판단
+- BigToM은 q1/q2/q3를 `my_answers` (복수 리스트)로 반환 → `my_answer` 항상 빈 문자열
+- `changed = bool("") and ...` → 항상 False → 답 바꿨든 안 바꿨든 **무조건 `ignored_critique`**
+- supervisor correction에 "전원 모든 비판 무시" 신호가 전달됨
+- `_print_rebuttal_phase`도 같은 단수 필드를 읽어 콘솔에 answer가 항상 `?`로 출력됨
+
+### 수정
+
+- `_accumulate_flags`: `rebuttal_out["my_answer"]` 대신 병합 완료된 `state_after.agent_outputs[agent_key].tom_answers` q1 값으로 `new_answer` 산출
+- `_print_rebuttal_phase`: 동일하게 `agent_outputs`에서 병합된 q1 값을 출력
+- 두 함수 모두 `state` / `agent_outputs`를 인자로 추가 전달
+
+### Files changed
+
+- `supervisor/debate.py`
+
+---
+
+## [11] _split_majority_minority — 전체 질문 기준으로 수정
+
+### 기존 문제
+
+- q1 vote만 기준으로 majority/minority 분류
+- q1 합의 + q2/q3 불일치 케이스에서 minority=[] → fallback으로 전원 전체 critique 수신
+
+### 수정
+
+- 모든 질문(q1/q2/q3)에서 불일치 검사
+- 하나라도 minority 답변을 가진 에이전트 → minority로 분류
+- 모든 질문에서 majority 답변 → majority로 분류
+
+### Files changed
+
+- `supervisor/debate.py`
+
+---
+
+## [10] debate 루프 break 제거 — max_rounds 정상 동작
+
+### 기존 문제
+
+- 라운드 종료 후 minority 존재하면 `break`로 전체 루프 탈출
+- `max_rounds=3`으로 설정해도 항상 1라운드만 실행되고 supervisor correction으로 넘어감
+
+### 수정
+
+- `if minority_keys: break` 블록 제거
+- 합의 미달 시 다음 라운드로 자연스럽게 진행
+- minority 보호 설계(합산 critique 전달, rebuttal 1회)는 rebuttal 단계에서 이미 보장되므로 break 불필요
+
+### Files changed
+
+- `supervisor/debate.py`
+
+---
+
 ## [9] 실행 모드 재구성 + 출력 파일 폴더 정리
 
 ### 기존 문제
