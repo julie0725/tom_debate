@@ -381,8 +381,22 @@ class DebateManager:
         if not q_ids:
             q_ids = ["q1"]
 
+        # 라운드마다 답을 바꾼 횟수 카운트 — 일관성 없는 에이전트 가중치 감소
+        change_threshold = max(1, self.max_rounds // 2)
+        change_counts: dict[str, int] = {}
+        for flag in self.accumulated_flags:
+            if flag["flag"] == "accepted_critique":
+                change_counts[flag["target"]] = change_counts.get(flag["target"], 0) + 1
+
+        # 역할특화 가중치: 등장인물 수 기반 차원 분기
+        if len(state.characters) >= 2:
+            # n차원 (인물 2명+): Observer 중심
+            role_weights = {"agent1": 0.25, "agent2": 0.25, "agent3": 0.5}
+        else:
+            # 1차원 (인물 1명 이하): Ego 중심
+            role_weights = {"agent1": 0.25, "agent2": 0.5, "agent3": 0.25}
+
         def vote_for(q_id: str) -> str:
-            # 가중치 투표: 초기 답변 유지 → 가중치 1.0, 바꿈 → 0.5 (쉽게 흔들린 agent 신뢰도 감소)
             weighted: dict[str, float] = {}
             for i in [1, 2, 3]:
                 agent_key = f"agent{i}"
@@ -392,12 +406,9 @@ class DebateManager:
                 val = _extract_choice_letter(get_answer_value(out.get("tom_answers"), q_id))
                 if not val:
                     continue
-                initial_out = (state.initial_agent_outputs or {}).get(agent_key)
-                initial_val = (
-                    _extract_choice_letter(get_answer_value(initial_out.get("tom_answers"), q_id))
-                    if initial_out else ""
-                )
-                weight = 1.0 if (initial_val and initial_val == val) else 0.5
+                role_w = role_weights.get(agent_key, 0.33)
+                flip_w = 0.5 if change_counts.get(agent_key, 0) > change_threshold else 1.0
+                weight = role_w * flip_w
                 weighted[val] = weighted.get(val, 0.0) + weight
 
             if not weighted:
