@@ -16,6 +16,12 @@ from core.llm_client import call_llm
 
 logger = logging.getLogger(__name__)
 
+_AGENT_ROLES = {
+    1: "You are Agent1 (Semantic Agent). Your role is to analyze context, judge which events are true or false, and infer character goals from observable facts.",
+    2: "You are Agent2 (Ego Agent). Your role is to track each character's belief state step by step, following their epistemic access through the timeline.",
+    3: "You are Agent3 (Observer Agent). Your role is to reason about higher-order beliefs — what characters believe about what other characters believe.",
+}
+
 
 def _extract_choice_letter(text: str) -> str:
     if not text:
@@ -182,7 +188,7 @@ class DebateManager:
         async def critique_one(agent_id: int) -> tuple[int, dict]:
             agent_key = f"agent{agent_id}"
             user_content = (
-                f"You are agent{agent_id}.\n\n"
+                f"{_AGENT_ROLES.get(agent_id, f'You are agent{agent_id}.')}\n\n"
                 f"Scenario:\n{state_dict['scenario']}\n\n"
                 f"Questions:\n{json.dumps(state_dict['questions'], ensure_ascii=False)}\n\n"
                 f"All agents' current reasoning (final answers hidden):\n"
@@ -244,7 +250,7 @@ class DebateManager:
                 if critic_key != agent_key and c_out.get(f"critique_of_{agent_key}")
             }
             user_content = (
-                f"You are agent{agent_id}.\n\n"
+                f"{_AGENT_ROLES.get(agent_id, f'You are agent{agent_id}.')}\n\n"
                 f"Scenario:\n{state_dict['scenario']}\n\n"
                 f"Questions:\n{json.dumps(state_dict['questions'], ensure_ascii=False)}\n\n"
                 f"Your current output:\n"
