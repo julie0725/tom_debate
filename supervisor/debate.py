@@ -6,7 +6,6 @@ import copy
 import json
 import logging
 import re
-from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
@@ -215,80 +214,22 @@ class DebateManager:
 
     # ── Phase 2: Rebuttal ─────────────────────────────────────────────────────
 
-    def _split_majority_minority(self, state: ToMState) -> tuple[list, list]:
-        """Returns (majority_agent_keys, minority_agent_keys) across all questions."""
-        agent_keys = [k for k, v in state.agent_outputs.items() if v]
-
-        q_votes: dict = {}
-        for agent_key in agent_keys:
-            output = state.agent_outputs[agent_key]
-            for a in (output.get("tom_answers") or []):
-                qid = a.get("id")
-                val = _extract_choice_letter(a.get("value", ""))
-                if qid and val:
-                    q_votes.setdefault(qid, {})[agent_key] = val
-
-        if not q_votes:
-            return agent_keys, []
-
-        minority_set: set = set()
-        for qid, votes in q_votes.items():
-            if len(set(votes.values())) <= 1:
-                continue
-            majority_answer = Counter(votes.values()).most_common(1)[0][0]
-            for agent_key, val in votes.items():
-                if val != majority_answer:
-                    minority_set.add(agent_key)
-
-        if not minority_set:
-            return agent_keys, []
-
-        majority = [k for k in agent_keys if k not in minority_set]
-        minority = list(minority_set)
-        return majority, minority
-
     async def _run_rebuttal_phase(
         self, pool: MessagePool, round_num: int, critiques: dict, run_logger=None
-    ) -> None:
-        """Each agent rebuts critiques directed at it and updates its answer."""
+    ) -> list:
+        """Each agent rebuts all critiques directed at it and updates its answer."""
         state = pool.get_state()
         state_dict = asdict(state)
         agent_ids = list(self.agents.keys())
 
-        majority_keys, minority_keys = self._split_majority_minority(state)
-
         async def rebuttal_one(agent_id: int) -> tuple[int, dict]:
             agent_key = f"agent{agent_id}"
 
-            # 소수 에이전트: 다수 측 critique를 하나로 합산해 전달 (개별 압박 제거)
-            if agent_key in minority_keys and majority_keys:
-                majority_critiques = [
-                    critiques[mk].get(f"critique_of_{agent_key}", "")
-                    for mk in majority_keys
-                    if critiques.get(mk, {}).get(f"critique_of_{agent_key}")
-                ]
-                if majority_critiques:
-                    merged = "Majority position:\n" + "\n\n".join(majority_critiques)
-                    incoming = {"majority": merged}
-                else:
-                    incoming = {}
-            else:
-                # 다수 에이전트: 소수 측 critique만 수신
-                incoming = {
-                    critic_key: c_out.get(f"critique_of_{agent_key}", "")
-                    for critic_key, c_out in critiques.items()
-                    if critic_key != agent_key
-                    and critic_key in minority_keys
-                    and c_out.get(f"critique_of_{agent_key}")
-                }
-                # 소수가 없으면 전체 critique 수신 (fallback)
-                if not incoming:
-                    incoming = {
-                        critic_key: c_out.get(f"critique_of_{agent_key}", "")
-                        for critic_key, c_out in critiques.items()
-                        if critic_key != agent_key
-                        and c_out.get(f"critique_of_{agent_key}")
-                    }
+            incoming = {
+                critic_key: c_out.get(f"critique_of_{agent_key}", "")
+                for critic_key, c_out in critiques.items()
+                if critic_key != agent_key and c_out.get(f"critique_of_{agent_key}")
+            }
             user_content = (
                 f"You are agent{agent_id}.\n\n"
                 f"Scenario:\n{state_dict['scenario']}\n\n"
