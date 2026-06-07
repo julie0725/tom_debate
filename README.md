@@ -17,22 +17,43 @@ echo "OPENAI_API_KEY=your_api_key" > .env
 
 ## 실행
 
-```bash
-
 # 기본 실행 : 데이터셋 전체 실행 — BigToM + HiToM 동시 실행
-python main.py --mode full_system
-python main.py --mode full_system --limit 10  # 설정 가능
 
-# 개별 실행
+```bash
+python main.py --mode full_system #전체
+```
+
+# 개별 실행 : 데이터셋 선택 가능
+
+```bash
 python main.py --mode bigtom # BigToM 단독
 python main.py --mode hitom  # HiToM 단독
-python main.py --mode bigtom --limit 10 # 테스트할 샘플 개수 설정 가능
+```
 
+# 테스트 샘플 수 설정 가능
+
+```bash
+python main.py --mode bigtom --limit 10
+```
+
+# 추가 명령어
+
+```bash
 # 단일 자연어 입력 (터미널에서 직접 입력)
 python main.py --mode single
+```
 
+```bash
 # 저장된 결과만 평가
 python main.py --mode eval
+```
+
+## 실행 결과 확인
+
+```
+full_system → outputs/results_full_system/{bigtom|hitom}/
+bigtom → outputs/results_bigtom/
+hitom → outputs/results_hitom/
 ```
 
 > 전처리 스크립트 불필요 — Adapter가 원본 파일을 직접 읽음
