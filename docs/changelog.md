@@ -2,6 +2,267 @@
 
 ---
 
+## [9] 실행 모드 재구성 + 출력 파일 폴더 정리
+
+### 기존 문제
+
+- `--mode batch`와 `--mode full_batch`가 중복으로 존재해 혼란
+- md 파일이 output 루트에 누적되어 실행마다 파일이 쌓임
+- 데이터셋별 단독 실행 모드 없음
+
+### 수정한 사항
+
+**main.py**
+- `--mode full_batch` → `--mode full_system` (BigToM + HiToM 전체 실행)
+- `--mode batch` 제거
+- `--mode bigtom` 추가 → `outputs/results_bigtom/`
+- `--mode hitom` 추가 → `outputs/results_hitom/`
+- `full_system` 실행 시 각 데이터셋별 서브폴더: `outputs/results_full_system/{dataset}/`
+- json, jsonl, csv 모두 해당 출력 폴더에 번들링
+- `DATASET_CONFIGS` 상수 추가 (데이터셋 경로/이름 중앙 관리)
+
+**user/ai_user.py**
+- `submit_from_dataset`: `{output_dir}/md/` 서브폴더 생성, 실행 전 이전 md 파일 정리
+- `_submit`: md 파일을 `{output_dir}/md/{dataset_id}.md`로 저장 (기존: 루트에 저장)
+
+### 출력 구조
+
+```
+outputs/
+  results_full_system/
+    bigtom/
+      md/               ← md 파일 (샘플별)
+      results_*.jsonl
+      prism_samples.csv
+      evaluation_*.json
+    hitom/
+      md/
+      ...
+    prism_results.csv   ← 전체 요약
+  results_bigtom/
+    md/
+    ...
+  results_hitom/
+    md/
+    ...
+```
+
+### Files changed
+
+- `main.py`
+- `user/ai_user.py`
+
+---
+
+## [8] 전 모드 FINAL METRICS 출력 통일 + CSV None 수정
+
+### 기존 문제
+
+- `batch` 모드: `silent=True`로 평가 결과 출력 없음
+- `eval` 모드: EVALUATION SUMMARY 형식 (다른 포맷)
+- ablation 모드: condition/dataset 없이 evaluate_from_jsonl 호출
+- CSV에서 None 값이 `"None"` 문자열로 저장됨 (빈 문자열이어야 함)
+
+### 수정한 사항
+
+**evaluator.py**
+- `_print_summary` → `_print_final_metrics`로 교체 (FINAL METRICS 형식)
+- `evaluate_from_jsonl`에 `condition` 파라미터 추가 (default: "PRISM")
+
+**main.py**
+- `run_batch`: `silent=True` 제거 → FINAL METRICS 출력
+- CSV 저장 시 None → 빈 문자열로 변환 (`_none_to_empty`)
+
+**ablation runners** (`no_debate`, `no_agent`, `no_supervisor`, `max_rounds`)
+- `evaluate_from_jsonl` 호출 시 `condition=condition["name"]`, `dataset_name=dataset_name` 전달
+
+### Files changed
+
+- `evaluation/evaluator.py`
+- `main.py`
+- `evaluation/no_debate_ablation.py`
+- `evaluation/no_agent_ablation.py`
+- `evaluation/no_supervisor_ablation.py`
+- `evaluation/max_rounds_ablation.py`
+
+---
+
+## [7] 페르소나 분리 — critique/rebuttal 전 단계 페르소나 유지
+
+### 기존 문제
+
+- critique/rebuttal 호출 시 3 에이전트가 동일한 generic system prompt 사용 → 페르소나 소실
+- 토론 단계에서 Agent1(사건 판단), Agent2(믿음 추적), Agent3(관찰자) 역할 구분 없이 동일한 "ToM reasoner"로 동작
+- LangGraph 대비 diversity 부재 → critique 관점이 획일화됨
+
+### 수정한 사항
+
+**페르소나 프롬프트 분리** (`prompts/agent{1/2/3}_persona_prompt.txt` 신규)
+- 각 에이전트의 역할 정의 + 추론 방법론 규칙 (R_EVIDENCE, R_STRUCT 포함)
+- 출력 schema(R8/R9) 제외 → critique/rebuttal 출력 형식과 충돌 방지
+
+**초기 추론 프롬프트 분리** (`prompts/agent{1/2/3}_initial_infer_prompt.txt` 신규)
+- 입력 형식 + 출력 schema (R8/R9) 만 포함
+- 초기 추론 시 `persona + initial_infer` 조합으로 호출
+
+**base_agent `_load_prompt()` 업데이트** (`agents/base_agent.py`)
+- `agent{N}_persona_prompt.txt` + `agent{N}_initial_infer_prompt.txt` 자동 결합
+- fallback: 기존 `agent{N}_prompt.txt`
+
+**debate.py 페르소나 주입** (`supervisor/debate.py`)
+- `__init__`에서 3개 persona prompt 로드
+- critique: `persona[agent_id] + debate_critique_prompt`
+- rebuttal: `persona[agent_id] + debate_rebuttal_prompt`
+
+**debate 프롬프트 첫 줄 제거** (`prompts/debate_critique_prompt.txt`, `debate_rebuttal_prompt.txt`)
+- generic "You are an expert Theory of Mind reasoner..." 제거 → persona prompt로 대체
+
+### Files changed
+
+- `prompts/agent1_persona_prompt.txt` — 신규
+- `prompts/agent2_persona_prompt.txt` — 신규
+- `prompts/agent3_persona_prompt.txt` — 신규
+- `prompts/agent1_initial_infer_prompt.txt` — 신규
+- `prompts/agent2_initial_infer_prompt.txt` — 신규
+- `prompts/agent3_initial_infer_prompt.txt` — 신규
+- `agents/base_agent.py` — `_load_prompt()` persona+initial_infer 결합
+- `supervisor/debate.py` — persona prompt 로드 및 critique/rebuttal 주입
+- `prompts/debate_critique_prompt.txt` — 첫 줄 제거
+- `prompts/debate_rebuttal_prompt.txt` — 첫 줄 제거
+
+---
+
+## [6] 미반영 항목 보완 (agent 프롬프트 증거 인용 / 라운드 간 발언 순서 고정)
+
+### 기존 문제
+
+- agent1/2/3 초기 추론 프롬프트에 증거 인용 의무 없음 → 근거 없는 추론 허용
+- max_rounds=3이면 소수 에이전트가 rebuttal 후에도 다음 라운드에서 다수의 critique를 또 받음 → 수적 압박 반복
+
+### 수정한 사항
+
+**agent1/2/3 초기 추론 프롬프트 R_EVIDENCE 추가** (`prompts/agent1/2/3_prompt.txt`)
+- 모든 주장에 스토리 이벤트 번호 또는 문장 직접 인용 의무화
+
+**라운드 간 발언 순서 고정** (`supervisor/debate.py`)
+- 소수 에이전트가 rebuttal 완료 후, `_split_majority_minority()`로 소수 존재 확인 시 즉시 debate 루프 종료
+- 소수가 항상 마지막 발언으로 끝나는 구조 보장 (합의 미달 시에도)
+
+### Files changed
+
+- `prompts/agent1_prompt.txt` — R_EVIDENCE 추가
+- `prompts/agent2_prompt.txt` — R_EVIDENCE 추가
+- `prompts/agent3_prompt.txt` — R_EVIDENCE 추가
+- `supervisor/debate.py` — 소수 rebuttal 후 debate 루프 break
+
+---
+
+## [5] Debate 품질 개선 (Blind Critique / 다수 critique 합치기 / 가중치 투표 / 증거 인용)
+
+### 기존 문제
+
+- critique 시 다른 에이전트의 최종 답변이 노출되어 논리 검증 대신 답변 동조(sycophancy) 발생
+- 소수 에이전트가 다수 에이전트들의 개별 압박을 동시에 수신 → 포지션이 아닌 수적 압박에 굴복
+- majority vote에서 쉽게 답을 바꾼 에이전트와 일관된 에이전트가 동일 가중치로 처리됨
+- 답변 변경 시 어떤 근거로 바꿨는지 명시 의무 없음 → 근거 없는 동조 허용
+
+### 수정한 사항
+
+**Blind Critique** (`supervisor/debate.py`)
+- critique 시 `tom_answers` 제거한 blind_outputs만 전달 → 답변 숨김
+- 에이전트가 논리를 공격하게 유도, 답변 동조 차단
+
+**다수 critique 합치기 + 발언 순서 고정** (`supervisor/debate.py`)
+- `_split_majority_minority()` 추가: q1 기준 다수/소수 에이전트 분류
+- 소수 에이전트: 다수 측 critique를 "Majority position" 단일 메시지로 합산 수신
+- 다수 에이전트: 소수 측 critique만 수신 → 발언 순서 자동 고정
+
+**가중치 투표** (`supervisor/debate.py`)
+- 초기 답변 유지 에이전트: 가중치 1.0
+- 토론 중 답변 변경 에이전트: 가중치 0.5
+- 쉽게 흔들린 에이전트의 투표 영향력 감소
+
+**증거 인용 의무화** (`prompts/debate_critique_prompt.txt`, `prompts/debate_rebuttal_prompt.txt`)
+- critique: 스토리 문장 직접 인용 + event 번호 함께 명시 의무화
+- rebuttal: 답변 변경 시 어떤 근거가 추론의 어느 부분을 반박했는지 명시 의무화
+
+### Files changed
+
+- `supervisor/debate.py` — Blind Critique, majority/minority 분류, 가중치 투표
+- `prompts/debate_critique_prompt.txt` — 답변 숨김 안내 + 증거 인용 규칙
+- `prompts/debate_rebuttal_prompt.txt` — 답변 변경 시 근거 명시 규칙
+
+---
+
+## [4] 초기 출력 freeze + Supervisor 전체 맥락 확장
+
+### 기존 문제
+
+- 토론 중 `agent_outputs`가 계속 덮어써져 초기 독립 추론 기록이 소실됨
+- `_re_reason_fresh()` 재추론 시 오염된 토론 결과와 debate_context가 그대로 전달되어 Anchoring 발생
+- Supervisor correction이 `events[]`, `characters[]`만 보고 판단 → 시나리오 원문, belief_states, reasoning_type 없이 교정하여 hallucination 유발
+- Supervisor 지침에 고차 ToM(2nd-order+) 기준 없음 → "직접 관찰 증거 없음"으로 정답을 오답 처리
+
+### 수정한 사항
+
+**에이전트별 초기 출력 freeze** (`core/context_file.py`, `supervisor/supervisor.py`, `supervisor/debate.py`)
+- `ToMState`에 `initial_agent_outputs` 필드 추가
+- 초기 추론 직후 `state.initial_agent_outputs`에 복사본 저장 (토론이 덮어써도 보존)
+- `_re_reason_fresh()`: 오염된 `agent_outputs` 대신 `initial_agent_outputs` 사용, `debate_context` 초기화
+
+**Supervisor 전체 맥락 제공** (`supervisor/supervisor.py`, `prompts/supervisor_correction_prompt.txt`)
+- Supervisor correction에 `scenario`(원문), `questions`, `reasoning_type`, `belief_states`, `goals` 추가
+- Supervisor 프롬프트에 고차 ToM 기준 명시: 2nd-order+ 추론에서 간접 추론으로 얻은 믿음도 유효함
+
+### Files changed
+
+- `core/context_file.py` — `initial_agent_outputs` 필드 추가
+- `supervisor/supervisor.py` — 초기 출력 freeze + supervisor correction 맥락 확장
+- `supervisor/debate.py` — `_re_reason_fresh()`에서 initial 출력 + 빈 debate_context 사용
+- `prompts/supervisor_correction_prompt.txt` — 고차 ToM epistemic access 지침 추가
+
+---
+
+## [3] 독립 버그 3종 수정 (캐시 오염 / q1만 업데이트 / 빈값)
+
+### What changed
+
+**1. 캐시 오염 수정** (`core/extractor.py`, `user/ai_user.py`)
+- 캐시 경로를 `outputs/cache/{dataset_id}.json` → `outputs/cache/{dataset_type}/{dataset_id}.json`으로 변경
+- BigToM/HiToM 등 서로 다른 데이터셋이 같은 숫자 ID를 가질 때 캐시 파일이 충돌하던 문제 해결
+- `submit_from_dataset()`에서 각 task의 metadata에 `dataset_type`(파일명 stem)을 자동 주입
+
+**2. rebuttal이 q1만 업데이트하던 버그 수정** (`supervisor/debate.py`, `prompts/debate_rebuttal_prompt.txt`)
+- rebuttal 프롬프트 출력 형식을 `my_answer` (단일 문자) → `my_answers` (전체 질문 리스트)로 변경
+- 파싱 로직을 `tom_map` 딕셔너리 기반으로 변경해 q1/q2/q3 전체 업데이트
+- 기존 `my_answer` 필드는 fallback으로 유지 (하위 호환)
+
+**3. 빈값 → unknown 처리** (`supervisor/debate.py`)
+- `_majority_vote()`: 빈 문자열 투표 필터링, 유효 투표 없으면 `"unknown"` 반환
+- `_extract_answer_from_state()`: `_extract_choice_letter()` 결과가 빈값이면 `"unknown"` 반환
+
+### Files changed
+
+- `core/extractor.py` — cache 경로 namespace 추가
+- `user/ai_user.py` — dataset_type을 task.metadata에 주입
+- `prompts/debate_rebuttal_prompt.txt` — my_answers 리스트 형식으로 변경
+- `supervisor/debate.py` — rebuttal 파싱 전체 질문 업데이트 + 빈값 unknown 처리
+
+---
+
+## [2] PRISM_SPEC.md 추가
+
+### What changed
+
+프로젝트 연구 배경·설계 목표·실험 결과 전반을 담은 명세서 `PRISM_SPEC.md`를 루트에 추가.
+Claude Code가 코드 수정·확장 판단 시 참조할 수 있도록 개발 동기, 선행 기술, 시스템 아키텍처, 컨텍스트 파일 구조, 트리거, Supervisor 교정 알고리즘, Ablation Study 결과(Hi-ToM 성능 역전 문제 포함)를 정리.
+
+### Files changed
+
+**`PRISM_SPEC.md`** (신규 생성)
+
+---
+
 ## [1] Answer Format Unification — Letter-Only Output
 
 ### What changed

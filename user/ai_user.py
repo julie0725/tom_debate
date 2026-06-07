@@ -83,6 +83,11 @@ class AIUser:
         if results_path.exists():
             results_path.unlink()
 
+        self.md_dir = self.output_dir / "md"
+        self.md_dir.mkdir(parents=True, exist_ok=True)
+        for old_md in self.md_dir.glob("*.md"):
+            old_md.unlink()
+
         tasks = list(self.proxy.get_tasks(path, limit))
         for task in tasks:
             task.metadata.setdefault("dataset_type", dataset_stem)
@@ -154,8 +159,9 @@ class AIUser:
 
         self._save_result(final_state, elapsed, prompt_tok, completion_tok, cost)
 
-        md_path = self.output_dir / f"{task.dataset_id or 'result'}.md"
-        md_path.write_text(pool.dump_markdown(), encoding="utf-8")
+        safe_id = str(task.dataset_id or "result").replace("/", "_").replace(":", "_")
+        md_dir = getattr(self, "md_dir", self.output_dir)
+        (md_dir / f"{safe_id}.md").write_text(pool.dump_markdown(), encoding="utf-8")
 
         logger.info(f"[AIUser] Pipeline complete | status={final_state.status}")
         return final_state

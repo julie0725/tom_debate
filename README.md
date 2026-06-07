@@ -18,17 +18,18 @@ echo "OPENAI_API_KEY=your_api_key" > .env
 ## 실행
 
 ```bash
+
+# 데이터셋 전체 실행 — BigToM + HiToM 동시 실행
+python main.py --mode full_system
+python main.py --mode full_system --limit 10  # 테스트 용도 샘플 제한
+
+# 각 데이터셋 개별 실행
+python main.py --mode bigtom
+python main.py --mode hitom
+python main.py --mode bigtom --limit 10
+
 # 단일 자연어 입력 (터미널에서 직접 입력)
 python main.py --mode single
-
-# 배치 실험 — BigToM + HiToM 동시 실행
-python main.py --mode full_batch
-python main.py --mode full_batch --limit 10  # 테스트용 샘플 제한
-
-# 배치 실험 — 데이터셋 개별 실행
-python main.py --mode batch --dataset data/bigtom/bigtom.csv
-python main.py --mode batch --dataset data/hitom/Hi-ToM_data.json
-python main.py --mode batch --dataset data/bigtom/bigtom.csv --limit 10
 
 # 저장된 결과만 평가
 python main.py --mode eval
