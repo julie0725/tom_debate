@@ -17,26 +17,26 @@ echo "OPENAI_API_KEY=your_api_key" > .env
 
 ## 실행
 
-# 기본 실행 : 데이터셋 전체 실행 — BigToM + HiToM 동시 실행
+## 기본 실행 : 데이터셋 전체 실행 — BigToM + HiToM 동시 실행
 
 ```bash
 python main.py --mode full_system #전체
 ```
 
-# 개별 실행 : 데이터셋 선택 가능
+### 개별 실행 : 데이터셋 선택 가능
 
 ```bash
 python main.py --mode bigtom # BigToM 단독
 python main.py --mode hitom  # HiToM 단독
 ```
 
-# 테스트 샘플 수 설정 가능
+### 테스트 샘플 수 설정 가능
 
 ```bash
 python main.py --mode bigtom --limit 10
 ```
 
-# 추가 명령어
+### 추가 명령어
 
 ```bash
 # 단일 자연어 입력 (터미널에서 직접 입력)
