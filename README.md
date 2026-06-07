@@ -223,17 +223,22 @@ critic → target 쌍마다:
   - 비판 받고 답변 유지  → "ignored_critique"
 ```
 
-**Supervisor Correction — 시나리오 차단:**
+**Supervisor Correction — 전달 항목:**
 
-| 전달 O                       | 전달 X                       |
-| ---------------------------- | ---------------------------- |
-| `flags` (누적 플래그)        | `scenario` (원본 스토리)     |
-| `agent_outputs.reasoning`    | `questions` (정답 힌트 포함) |
-| `agent_outputs.belief_state` | `common_state.belief_states` |
-| `common_state.events[]`      | `common_state.goals`         |
-| `common_state.characters[]`  | `gold_answer`                |
+| 전달 O                         |
+| ------------------------------ |
+| `scenario` (원본 스토리)       |
+| `questions`                    |
+| `flags` (누적 플래그)          |
+| `agent_outputs.reasoning`      |
+| `agent_outputs.belief_state`   |
+| `agent_outputs.tom_answers`    |
+| `common_state.events[]`        |
+| `common_state.characters[]`    |
+| `common_state.belief_states`   |
+| `common_state.goals`           |
 
-> Supervisor는 시나리오를 모르고 논리적 일관성만 판단 → 정답 없는 현실 문제에서도 작동
+> `gold_answer`만 제외 — Supervisor는 정답을 모른 채 논리적 일관성만 판단
 
 **Supervisor Correction 역할 변화:**
 
