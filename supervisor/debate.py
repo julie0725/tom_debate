@@ -125,12 +125,6 @@ class DebateManager:
                 logger.info(f"[Debate] Consensus reached at round {round_num}")
                 return self._extract_answer_from_state(state)
 
-            # 소수가 반박한 뒤 다수가 재비판하는 추가 턴 없음 — 소수가 마지막 발언
-            _, minority_keys = self._split_majority_minority(state)
-            if minority_keys:
-                logger.info("[Debate] Minority spoke last — stopping debate to prevent further pressure.")
-                break
-
         logger.info("[Debate] Max rounds reached. Re-reasoning from scratch...")
 
         if supervisor_correction_fn:
