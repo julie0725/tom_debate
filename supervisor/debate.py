@@ -104,8 +104,8 @@ class DebateManager:
             })
             agreement, answer_map = self._check_agreement(state)
             self.event_callback("consensus", {"round": round_num, "agreement": agreement, "answer_map": answer_map})
-            self._print_rebuttal_phase(round_num, rebuttal_results)
-            self._accumulate_flags(critiques, rebuttal_results, outputs_before, round_num)
+            self._print_rebuttal_phase(round_num, rebuttal_results, state.agent_outputs)
+            self._accumulate_flags(critiques, rebuttal_results, outputs_before, round_num, state)
 
             self._print_round_result(round_num, {"agreement": agreement, "answer_map": answer_map})
             logger.info(f"[Debate] Round {round_num} agreement={agreement}")
@@ -216,19 +216,35 @@ class DebateManager:
     # ── Phase 2: Rebuttal ─────────────────────────────────────────────────────
 
     def _split_majority_minority(self, state: ToMState) -> tuple[list, list]:
-        """Returns (majority_agent_keys, minority_agent_keys) by q1 vote."""
-        votes = {}
-        for agent_key, output in state.agent_outputs.items():
-            if not output:
+        """Returns (majority_agent_keys, minority_agent_keys) across all questions."""
+        agent_keys = [k for k, v in state.agent_outputs.items() if v]
+
+        q_votes: dict = {}
+        for agent_key in agent_keys:
+            output = state.agent_outputs[agent_key]
+            for a in (output.get("tom_answers") or []):
+                qid = a.get("id")
+                val = _extract_choice_letter(a.get("value", ""))
+                if qid and val:
+                    q_votes.setdefault(qid, {})[agent_key] = val
+
+        if not q_votes:
+            return agent_keys, []
+
+        minority_set: set = set()
+        for qid, votes in q_votes.items():
+            if len(set(votes.values())) <= 1:
                 continue
-            val = _extract_choice_letter(get_answer_value(output.get("tom_answers"), "q1"))
-            if val:
-                votes[agent_key] = val
-        if len(set(votes.values())) <= 1:
-            return list(votes.keys()), []
-        majority_answer = Counter(votes.values()).most_common(1)[0][0]
-        majority = [k for k, v in votes.items() if v == majority_answer]
-        minority = [k for k in votes if k not in majority]
+            majority_answer = Counter(votes.values()).most_common(1)[0][0]
+            for agent_key, val in votes.items():
+                if val != majority_answer:
+                    minority_set.add(agent_key)
+
+        if not minority_set:
+            return agent_keys, []
+
+        majority = [k for k in agent_keys if k not in minority_set]
+        minority = list(minority_set)
         return majority, minority
 
     async def _run_rebuttal_phase(
@@ -357,14 +373,16 @@ class DebateManager:
                     print(f"{src} → {tgt}: \"{crit_text[:150]}{trail}\"")
 
     @staticmethod
-    def _print_rebuttal_phase(round_num: int, rebuttal_results) -> None:
+    def _print_rebuttal_phase(round_num: int, rebuttal_results, agent_outputs: dict = None) -> None:
         W = 40
         print(f"\n{'=' * W}")
         print(f"[Round {round_num}] REBUTTAL PHASE")
         print(f"{'=' * W}")
         for agent_id, r_out in sorted(rebuttal_results, key=lambda x: x[0]):
             rebuttal_text = str(r_out.get("rebuttal", ""))
-            answer = r_out.get("my_answer", "?")
+            agent_key = f"agent{agent_id}"
+            merged = (agent_outputs or {}).get(agent_key) or {}
+            answer = get_answer_value(merged.get("tom_answers"), "q1") or "?"
             trail = "..." if len(rebuttal_text) > 150 else ""
             print(f"Agent{agent_id} rebuttal: \"{rebuttal_text[:150]}{trail}\"")
             print(f"  → answer: {answer}")
@@ -464,11 +482,15 @@ class DebateManager:
         rebuttal_results: list,
         outputs_before: dict,
         round_num: int,
+        state_after: ToMState = None,
     ) -> None:
         """Record whether each agent accepted or ignored directed critiques."""
-        for agent_id, rebuttal_out in rebuttal_results:
+        for agent_id, _ in rebuttal_results:
             agent_key = f"agent{agent_id}"
-            new_answer = _extract_choice_letter(rebuttal_out.get("my_answer", ""))
+            merged_output = (state_after.agent_outputs.get(agent_key) if state_after else None) or {}
+            new_answer = _extract_choice_letter(
+                get_answer_value(merged_output.get("tom_answers"), "q1")
+            )
 
             old_tom = (outputs_before.get(agent_key) or {}).get("tom_answers") or []
             old_answer = next(
