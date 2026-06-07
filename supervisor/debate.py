@@ -167,6 +167,18 @@ class DebateManager:
             for ak, out in state_dict["agent_outputs"].items()
         }
 
+        # Targeted critique: focus on contested questions only
+        _, answer_map = self._check_agreement(state)
+        agreed_qs = [qid for qid, votes in answer_map.items() if len(set(votes.values())) == 1]
+        contested_qs = [qid for qid, votes in answer_map.items() if len(set(votes.values())) > 1]
+        if agreed_qs and contested_qs:
+            focus_hint = (
+                f"\nFocus your critique ONLY on {', '.join(contested_qs)} — "
+                f"{', '.join(agreed_qs)} already has consensus and does not need critique."
+            )
+        else:
+            focus_hint = ""
+
         async def critique_one(agent_id: int) -> tuple[int, dict]:
             agent_key = f"agent{agent_id}"
             user_content = (
@@ -178,6 +190,7 @@ class DebateManager:
                 f"Critique the reasoning of every agent EXCEPT yourself. "
                 f"Cite specific event numbers and story sentences as evidence. "
                 f"Set critique_of_{agent_key} to empty string."
+                f"{focus_hint}"
             )
             persona = self._persona_prompts.get(agent_id, "")
             critique_system = (persona + "\n\n" + self._critique_prompt) if persona else self._critique_prompt
