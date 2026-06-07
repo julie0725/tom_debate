@@ -366,9 +366,16 @@ class DebateManager:
             }
         state_dict["debate_context"] = {}
 
+        correction = state_dict.get("supervisor_correction")
+        per_agent_correction = isinstance(correction, dict)
+
         async def re_reason_agent(agent_id, agent):
             loop = asyncio.get_event_loop()
-            output = await loop.run_in_executor(None, agent.reason, state_dict)
+            if per_agent_correction:
+                agent_state = {**state_dict, "supervisor_correction": correction.get(f"agent{agent_id}", "")}
+            else:
+                agent_state = state_dict
+            output = await loop.run_in_executor(None, agent.reason, agent_state)
             return agent_id, output
 
         results = await asyncio.gather(*[re_reason_agent(aid, ag) for aid, ag in self.agents.items()])

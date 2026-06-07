@@ -211,7 +211,7 @@ INSTRUCTIONS:
 - Identify whose reasoning correctly tracks each character's epistemic access given the scenario.
 - Provide correction guidance to help agents reach consensus through better reasoning.
 """
-        correction = call_llm(
+        raw = call_llm(
             client=self.client,
             model=self.model,
             system_prompt=self.correction_prompt,
@@ -219,6 +219,16 @@ INSTRUCTIONS:
             max_tokens=self.max_tokens,
             temperature=self.temperature
         )
-        logger.info(f"[Supervisor] Correction generated: {correction[:100]}...")
+        correction = self._parse_per_agent_correction(raw)
+        logger.info(f"[Supervisor] Correction generated (per-agent): { {k: v[:60] for k, v in correction.items()} }")
         return correction
+
+    @staticmethod
+    def _parse_per_agent_correction(text: str) -> dict:
+        import re
+        pattern = r'\[Agent(\d)\](.*?)(?=\[Agent\d\]|$)'
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            return {f"agent{num}": content.strip() for num, content in matches}
+        return {"agent1": text.strip(), "agent2": text.strip(), "agent3": text.strip()}
 
