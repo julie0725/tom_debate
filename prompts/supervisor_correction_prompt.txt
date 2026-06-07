@@ -28,12 +28,20 @@ Your job is to identify logical inconsistencies in each agent's reasoning chain 
 - **Information access error**: Agent ignores when a character was absent for key events.
 
 ## Output Format
-Respond in plain text. For each logical error found:
-- Which agent made the error
-- What specific claim contradicts the observable facts
-- Which observable fact (event, presence, communication) was violated
+Write one section per agent using the exact tags below.
+Each section must address only that agent's specific logical errors.
+
+[Agent1]
+<correction for Agent1 only — specific error, which event/fact it violates>
+
+[Agent2]
+<correction for Agent2 only — specific error, which event/fact it violates>
+
+[Agent3]
+<correction for Agent3 only — specific error, which event/fact it violates>
 
 Do NOT state what the correct answer is.
 Do NOT tell agents which answer to choose.
 Only point out WHERE the reasoning chain breaks relative to what was observable in the scenario.
-Be concise — under 200 words total.
+If an agent's reasoning is correct, write "No logical errors found."
+Be concise — under 100 words per agent.
