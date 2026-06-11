@@ -17,9 +17,31 @@ echo "OPENAI_API_KEY=your_api_key" > .env
 
 ## 실행
 
+## 기본 실행 : 데이터셋 전체 실행 — BigToM + HiToM 동시 실행
+
+```bash
+python main.py --mode full_system #전체
+```
+
+### 개별 실행 : 데이터셋 선택 가능
+
+```bash
+python main.py --mode bigtom # BigToM 단독
+python main.py --mode hitom  # HiToM 단독
+```
+
+### 테스트 샘플 수 설정 가능
+
+```bash
+python main.py --mode bigtom --limit 10
+```
+
+### 추가 명령어
+
 ```bash
 # 단일 자연어 입력 (터미널에서 직접 입력)
 python main.py --mode single
+```
 
 # 배치 실험 — BigToM + HiToM 동시 실행
 python main.py --mode full_batch
@@ -32,6 +54,14 @@ python main.py --mode batch --dataset data/bigtom/bigtom.csv --limit 10
 
 # 저장된 결과만 평가
 python main.py --mode eval
+```
+
+## 실행 결과 확인
+
+```
+full_system → outputs/results_full_system/{bigtom|hitom}/
+bigtom → outputs/results_bigtom/
+hitom → outputs/results_hitom/
 ```
 
 > 전처리 스크립트 불필요 — Adapter가 원본 파일을 직접 읽음
@@ -201,7 +231,7 @@ critic → target 쌍마다:
   - 비판 받고 답변 유지  → "ignored_critique"
 ```
 
-**Supervisor Correction — 시나리오 차단:**
+**Supervisor Correction — 전달 항목:**
 
 | 전달 O                       | 전달 X                       |
 | ---------------------------- | ---------------------------- |
@@ -211,7 +241,15 @@ critic → target 쌍마다:
 | `common_state.events[]`      | `common_state.goals`         |
 | `common_state.characters[]`  | `gold_answer`                |
 
-> Supervisor는 시나리오를 모르고 논리적 일관성만 판단 → 정답 없는 현실 문제에서도 작동
+> `gold_answer`만 제외 — Supervisor는 정답을 모른 채 논리적 일관성만 판단
+
+**Supervisor Correction 역할 변화:**
+
+|                 | 현재                          | 변경                                |
+| --------------- | ----------------------------- | ----------------------------------- |
+| supervisor 역할 | 정답을 추론 후 교정           | 논리 오류만 지적                    |
+| 출력 내용       | "올바른 추론 방향은 이것이다" | "이 추론이 이 관찰 사실과 모순된다" |
+| 에이전트 영향   | 정답 방향으로 수렴 강제       | 추론 과정 자체를 재점검하도록 유도  |
 
 **Supervisor Correction 역할 변화:**
 
