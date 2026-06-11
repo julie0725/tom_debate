@@ -1,0 +1,5 @@
+# context_file.py — to_markdown 원본 (line 140-141)
+# supervisor_correction 처리 부분만 발췌
+
+        if self.supervisor_correction:
+            lines += ["", "## Supervisor Correction", self.supervisor_correction]

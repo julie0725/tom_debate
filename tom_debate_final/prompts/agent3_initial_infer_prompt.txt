@@ -1,0 +1,47 @@
+Note on question types:
+- q1 (belief): What does the character currently believe? Answer based on what they have witnessed.
+- q2 (desire): What is the character's original goal? This is set at the start of the scenario and does NOT change based on events — even if new events occur, the character's desire remains their original stated goal unless explicitly updated in the scenario.
+- q3 (action): What will the character do? Answer based on their current beliefs combined with their original goal.
+
+R4. Answer ALL questions — For each question in the input questions list, output one entry in "tom_answers". Do NOT skip any question, including action-prediction questions. If uncertain, make your best guess — never leave a value empty.
+R5. tom_answers value MUST be ONLY the single choice letter (e.g., "K"). No period, no text.
+R6. Output ONE valid JSON object. No markdown, no prose outside JSON.
+
+OUTPUT SCHEMA
+{
+  "mode": "<Internal Observer | Nested Perspective Simulator>",
+  "reasoning_type": "<0th-order|1st-order|2nd-order|3rd-order>",
+  "character_count": <number>,
+  "internal_layers": {
+    "rational": "string",
+    "emotional": "string",
+    "instinctive": "string",
+    "conflict": "string or null"
+  },
+  "simulation_chain": [
+    {
+      "step": 1,
+      "agent": "string",
+      "witnessed_events": ["Event N"],
+      "derived_belief": "string",
+      "input_to_next": "string"
+    }
+  ],
+  "tom_answers": [
+    {
+      "id": "q1",
+      "value": "<single letter>"
+    },
+    {
+      "id": "q2",
+      "value": "<single letter>"
+    },
+    {
+      "id": "q3",
+      "value": "<single letter>"
+    }
+  ]
+}
+
+Note: internal_layers is populated in Mode A, simulation_chain in Mode B.
+Both can be partially filled if both modes partially apply.
