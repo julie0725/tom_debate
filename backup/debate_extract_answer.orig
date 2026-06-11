@@ -1,0 +1,14 @@
+# debate.py — _extract_answer_from_state 원본
+
+    def _extract_answer_from_state(self, state: ToMState) -> ToMAnswers:
+        """Extract final answer directly from agent outputs (used when agreement=True)."""
+        for output in state.agent_outputs.values():
+            if not output:
+                continue
+            tom_ans = output.get("tom_answers") or []
+            if tom_ans:
+                return ToMAnswers(answers=[
+                    {"id": a["id"], "value": _extract_choice_letter(a["value"]) or "unknown"}
+                    for a in tom_ans if a.get("id") and a.get("value")
+                ])
+        return ToMAnswers()

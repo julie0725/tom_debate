@@ -71,15 +71,19 @@ Schema:
         self.client = get_llm_client(provider=self.provider, base_url=self.base_url)
         self.cache_dir = Path("outputs/cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.temperature = config.get("system", {}).get("temperature", 0.0)
 
     def extract(self, task: ToMTask) -> CommonToMState:
-        cache_path = self.cache_dir / f"{task.dataset_id}.json"
+        dataset_type = task.metadata.get("dataset_type", "default")
+        cache_dir = self.cache_dir / dataset_type
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{task.dataset_id}.json"
 
         if cache_path.exists():
-            logger.info(f"[Extractor] Cache hit: {task.dataset_id}")
+            logger.info(f"[Extractor] Cache hit: {dataset_type}/{task.dataset_id}")
             return self._load_cache(cache_path)
 
-        logger.info(f"[Extractor] Extracting: {task.dataset_id}")
+        logger.info(f"[Extractor] Extracting: {dataset_type}/{task.dataset_id}")
         result = self._extract_via_llm(task)
         self._save_cache(cache_path, result)
         return result
@@ -96,6 +100,7 @@ Schema:
             system_prompt=self.SYSTEM_PROMPT,
             user_content=user_content,
             max_tokens=self.max_tokens,
+            temperature=self.temperature
         )
         cleaned = re.sub(r"```json|```", "", raw).strip()
         try:

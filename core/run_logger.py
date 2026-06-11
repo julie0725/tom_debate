@@ -315,10 +315,14 @@ class RunLogger:
     def log_supervisor_correction(self, correction: str):
         """max_rounds 초과 시 감독관 오류 분석 저장"""
         path = self.log_dir / "supervisor_correction.txt"
+        if isinstance(correction, dict):
+            text = "\n\n".join(f"[{k}]\n{v}" for k, v in correction.items())
+        else:
+            text = str(correction)
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"Timestamp: {datetime.now().isoformat()}\n\n")
-            f.write(correction)
-        print(f"\n[감독관 오류 분석]\n{correction[:400]}...\n")
+            f.write(text)
+        print(f"\n[감독관 오류 분석]\n{text[:400]}...\n")
         logger.info(f"[RunLogger] Supervisor correction saved: {path.name}")
 
     # ── 최종 요약 ─────────────────────────────────────────────

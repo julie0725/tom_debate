@@ -85,6 +85,12 @@ class ToMState:
         "agent2": None,
         "agent3": None
     })
+    # 토론 시작 전 초기 출력 (덮어쓰기 방지용 freeze)
+    initial_agent_outputs: dict = field(default_factory=lambda: {
+        "agent1": None,
+        "agent2": None,
+        "agent3": None
+    })
 
     # 토론 상태
     debate_round: int = 0
@@ -132,7 +138,10 @@ class ToMState:
                 for a in (output.get("tom_answers") or []):
                     lines.append(f"- {a.get('id', '?')}: {a.get('value', 'N/A')}")
         if self.supervisor_correction:
-            lines += ["", "## Supervisor Correction", self.supervisor_correction]
+            corr = self.supervisor_correction
+            if isinstance(corr, dict):
+                corr = "\n\n".join(f"[{k}]\n{v}" for k, v in corr.items())
+            lines += ["", "## Supervisor Correction", corr]
         lines += ["", "## Final Answer"]
         for a in self.final_answer.answers:
             lines.append(f"- {a.get('id', '?')}: {a.get('value', '')}")

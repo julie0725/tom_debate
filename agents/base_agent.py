@@ -24,19 +24,29 @@ class BaseAgent(ABC):
         model: str = "gpt-3.5-turbo",
         max_tokens: int = 2000,
         provider: str = "openai",
-        base_url: str = None
+        base_url: str = None,
+        temperature: float = 0.0
     ):
         self.agent_id = agent_id
         self.model = model
         self.max_tokens = max_tokens
+        self.temperature = temperature
         self.client = get_llm_client(provider=provider, base_url=base_url)
         self.system_prompt = self._load_prompt()
+        self.temperature = temperature 
 
     def _load_prompt(self) -> str:
-        prompt_path = Path(__file__).parent.parent / "prompts" / f"agent{self.agent_id}_prompt.txt"
-        if prompt_path.exists():
-            return prompt_path.read_text(encoding="utf-8")
-        logger.warning(f"Prompt file not found: {prompt_path}")
+        base = Path(__file__).parent.parent / "prompts"
+        persona_path = base / f"agent{self.agent_id}_persona_prompt.txt"
+        infer_path = base / f"agent{self.agent_id}_initial_infer_prompt.txt"
+        if persona_path.exists() and infer_path.exists():
+            persona = persona_path.read_text(encoding="utf-8")
+            infer = infer_path.read_text(encoding="utf-8")
+            return persona + "\n\n" + infer
+        fallback = base / f"agent{self.agent_id}_prompt.txt"
+        if fallback.exists():
+            return fallback.read_text(encoding="utf-8")
+        logger.warning(f"Prompt file not found for agent{self.agent_id}")
         return ""
 
     @abstractmethod
@@ -48,22 +58,42 @@ class BaseAgent(ABC):
 
         Prefers the new root-level tom_answers list from the LLM; falls back to
         constructing it from answer.response for backward compatibility.
+        Missing q2/q3 entries are filled from answer_block, then from q1 as last resort
+        (valid for BigToM where q1/q2/q3 share the same gold answer per condition).
         """
-        raw = parsed.get("tom_answers")
-        if isinstance(raw, list) and raw:
-            return raw
         answer_block = parsed.get("answer", {})
         primary = answer_block.get("response", "")
         questions = state_dict.get("questions", [])
+
+        raw = parsed.get("tom_answers")
+        if isinstance(raw, list) and raw:
+            answered = {a.get("id") for a in raw if a.get("value")}
+            missing = [q for q in questions if q.get("id") not in answered]
+            if not missing:
+                return raw
+            q1_val = next((a.get("value") for a in raw if a.get("id") == "q1"), primary)
+            result = list(raw)
+            for q in missing:
+                qid = q.get("id", "")
+                if qid == "q2":
+                    val = answer_block.get("q2_desire", "") or q1_val
+                elif qid == "q3":
+                    val = answer_block.get("q3_action", "") or q1_val
+                else:
+                    val = q1_val
+                if val:
+                    result.append({"id": qid, "value": val})
+            return result
+
         answers = []
         for q in questions:
             qid = q.get("id", "")
             if qid == "q1":
                 answers.append({"id": "q1", "value": primary})
             elif qid == "q2":
-                answers.append({"id": "q2", "value": answer_block.get("q2_desire", "")})
+                answers.append({"id": "q2", "value": answer_block.get("q2_desire", "") or primary})
             elif qid == "q3":
-                answers.append({"id": "q3", "value": answer_block.get("q3_action", "")})
+                answers.append({"id": "q3", "value": answer_block.get("q3_action", "") or primary})
         return answers or ([{"id": "q1", "value": primary}] if primary else [])
 
     def _call_llm(self, user_content: str) -> str:
@@ -73,7 +103,8 @@ class BaseAgent(ABC):
             model=self.model,
             system_prompt=self.system_prompt,
             user_content=user_content,
-            max_tokens=self.max_tokens
+            max_tokens=self.max_tokens,
+            temperature=self.temperature
         )
 
     def _parse_json_response(self, raw: str) -> dict:
@@ -85,9 +116,10 @@ class BaseAgent(ABC):
             return {}
 
     def _build_user_prompt(self, state_dict: dict) -> str:
+        state_for_prompt = {k: v for k, v in state_dict.items() if k != "ground_truth"}
         prompt = f"""
 Current context file:
-{json.dumps(state_dict, ensure_ascii=False, indent=2)}
+{json.dumps(state_for_prompt, ensure_ascii=False, indent=2)}
 """
         # MessagePool 기반 debate_context 읽기 — critique/rebuttal phase 구조 처리
         pool_ctx = state_dict.get("debate_context", {})

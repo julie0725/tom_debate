@@ -1,0 +1,25 @@
+system:
+  provider: "openai"
+  model: "gpt-4o-mini"
+  max_tokens: 2000
+  temperature: 0.0
+  base_url: null
+  temperature: 0
+
+supervisor:
+  use_correction: true
+
+debate:
+  max_rounds: 3
+  use_debate: true
+  tiebreak_agent: 3
+
+agents:
+  use_agent1: true
+  use_agent2: true
+  use_agent3: true
+
+evaluation:
+  dataset: "bigtom"
+  output_dir: "outputs/"
+  log_level: "INFO"

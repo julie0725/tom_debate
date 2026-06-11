@@ -21,7 +21,11 @@ echo "OPENAI_API_KEY=your_api_key" > .env
 # 단일 자연어 입력 (터미널에서 직접 입력)
 python main.py --mode single
 
-# 배치 실험 (데이터셋 파일)
+# 배치 실험 — BigToM + HiToM 동시 실행
+python main.py --mode full_batch
+python main.py --mode full_batch --limit 10  # 테스트용 샘플 제한
+
+# 배치 실험 — 데이터셋 개별 실행
 python main.py --mode batch --dataset data/bigtom/bigtom.csv
 python main.py --mode batch --dataset data/hitom/Hi-ToM_data.json
 python main.py --mode batch --dataset data/bigtom/bigtom.csv --limit 10
@@ -142,12 +146,12 @@ Supervisor
 
 데이터셋 포맷에 상관없이 파이프라인은 `ToMTask` 하나만 받음.
 
-| Adapter | 입력 | 특징 |
-|---|---|---|
-| `CsvAdapter` | Big-ToM `.csv` | 행당 2개 태스크 (true/false_belief), q1/q2/q3 번들 |
-| `JsonAdapter` | Hi-ToM `.json` | 직접 로드, q_order → reasoning_type 변환 |
-| `TextAdapter` | 자연어 원문 | LLM으로 scenario/question/characters 추출 |
-| `Proxy` | 파일 경로 or 텍스트 | 자동 라우팅 — 파이프라인은 Proxy만 알면 됨 |
+| Adapter       | 입력                | 특징                                               |
+| ------------- | ------------------- | -------------------------------------------------- |
+| `CsvAdapter`  | Big-ToM `.csv`      | 행당 2개 태스크 (true/false_belief), q1/q2/q3 번들 |
+| `JsonAdapter` | Hi-ToM `.json`      | 직접 로드, q_order → reasoning_type 변환           |
+| `TextAdapter` | 자연어 원문         | LLM으로 scenario/question/characters 추출          |
+| `Proxy`       | 파일 경로 or 텍스트 | 자동 라우팅 — 파이프라인은 Proxy만 알면 됨         |
 
 ```python
 # 모든 입력 경로가 동일하게 처리됨
@@ -174,13 +178,14 @@ CommonToMState
 
 세 에이전트는 동일한 `ToMState`를 보고 독립적으로 추론.
 
-| 에이전트 | 역할 | 핵심 출력 |
-|---|---|---|
-| **Semantic Agent** (Agent1) | 이벤트 진실/거짓 판단, 목표 추론 | `truth_judgment`, `tom_answers` |
-| **Ego Agent** (Agent2) | 인물별 belief state 추적 | `update_log`, `belief_state`, `tom_answers` |
-| **Observer Agent** (Agent3) | Mode A/B 고차원 추론 | `internal_layers` / `simulation_chain`, `tom_answers` |
+| 에이전트                    | 역할                             | 핵심 출력                                             |
+| --------------------------- | -------------------------------- | ----------------------------------------------------- |
+| **Semantic Agent** (Agent1) | 이벤트 진실/거짓 판단, 목표 추론 | `truth_judgment`, `tom_answers`                       |
+| **Ego Agent** (Agent2)      | 인물별 belief state 추적         | `update_log`, `belief_state`, `tom_answers`           |
+| **Observer Agent** (Agent3) | Mode A/B 고차원 추론             | `internal_layers` / `simulation_chain`, `tom_answers` |
 
 **Observer Agent Mode 분기:**
+
 - **Mode A (Internal Observer)**: `len(characters) == 1` 또는 `1st-order` — 내부 심리 레이어 분석 (rational / emotional / instinctive)
 - **Mode B (Nested Perspective Simulator)**: `len(characters) >= 2` AND `2nd-order+` — 중첩 관점 체인 시뮬레이션
 
@@ -189,6 +194,7 @@ CommonToMState
 매 라운드 합의 확인은 Python 규칙 기반 (LLM 없음). Supervisor LLM은 **MAX rounds 초과 시에만** 한 번 호출.
 
 **Flag 누적** (매 Rebuttal 후):
+
 ```
 critic → target 쌍마다:
   - 비판 받고 답변 바꿈  → "accepted_critique"
@@ -197,15 +203,23 @@ critic → target 쌍마다:
 
 **Supervisor Correction — 시나리오 차단:**
 
-| 전달 O | 전달 X |
-|---|---|
-| `flags` (누적 플래그) | `scenario` (원본 스토리) |
-| `agent_outputs.reasoning` | `questions` (정답 힌트 포함) |
+| 전달 O                       | 전달 X                       |
+| ---------------------------- | ---------------------------- |
+| `flags` (누적 플래그)        | `scenario` (원본 스토리)     |
+| `agent_outputs.reasoning`    | `questions` (정답 힌트 포함) |
 | `agent_outputs.belief_state` | `common_state.belief_states` |
-| `common_state.events[]` | `common_state.goals` |
-| `common_state.characters[]` | `gold_answer` |
+| `common_state.events[]`      | `common_state.goals`         |
+| `common_state.characters[]`  | `gold_answer`                |
 
 > Supervisor는 시나리오를 모르고 논리적 일관성만 판단 → 정답 없는 현실 문제에서도 작동
+
+**Supervisor Correction 역할 변화:**
+
+|                 | 현재                          | 변경                                |
+| --------------- | ----------------------------- | ----------------------------------- |
+| supervisor 역할 | 정답을 추론 후 교정           | 논리 오류만 지적                    |
+| 출력 내용       | "올바른 추론 방향은 이것이다" | "이 추론이 이 관찰 사실과 모순된다" |
+| 에이전트 영향   | 정답 방향으로 수렴 강제       | 추론 과정 자체를 재점검하도록 유도  |
 
 ---
 
@@ -224,14 +238,14 @@ Joint accuracy      — ground_truth에 있는 질문 모두 정답 시
 
 ## 데이터셋 비교
 
-| 항목 | Big-ToM | Hi-ToM |
-|---|---|---|
-| 입력 파일 | `bigtom.csv` (세미콜론 구분) | `Hi-ToM_data.json` |
-| 질문 수/샘플 | 최대 3개 (belief/desire/action) | 1개 |
-| reasoning_type | 1st-order | 0th ~ 3rd-order |
-| 선택지 | A/B 이지선다 | A~O 다지선다 |
-| 등장인물 | 1명 | 다수 (5명+) |
-| 조건 | true_belief / false_belief | 없음 |
+| 항목           | Big-ToM                         | Hi-ToM             |
+| -------------- | ------------------------------- | ------------------ |
+| 입력 파일      | `bigtom.csv` (세미콜론 구분)    | `Hi-ToM_data.json` |
+| 질문 수/샘플   | 최대 3개 (belief/desire/action) | 1개                |
+| reasoning_type | 1st-order                       | 0th ~ 3rd-order    |
+| 선택지         | A/B 이지선다                    | A~O 다지선다       |
+| 등장인물       | 1명                             | 다수 (5명+)        |
+| 조건           | true_belief / false_belief      | 없음               |
 
 ---
 
@@ -239,24 +253,24 @@ Joint accuracy      — ground_truth에 있는 질문 모두 정답 시
 
 `config/config.yaml`에서 `provider`만 바꾸면 전환 완료:
 
-| Provider | 환경변수 | 모델 예시 |
-|---|---|---|
+| Provider | 환경변수         | 모델 예시                 |
+| -------- | ---------------- | ------------------------- |
 | `openai` | `OPENAI_API_KEY` | `gpt-4o`, `gpt-3.5-turbo` |
-| `gemini` | `GEMINI_API_KEY` | `gemini-1.5-flash` |
-| `custom` | `CUSTOM_API_KEY` | Ollama 등 OpenAI 호환 |
+| `gemini` | `GEMINI_API_KEY` | `gemini-1.5-flash`        |
+| `custom` | `CUSTOM_API_KEY` | Ollama 등 OpenAI 호환     |
 
 ---
 
 ## Ablation 조건
 
-| 조건 | Semantic | Ego | Observer | Debate |
-|---|---|---|---|---|
-| full_system | O | O | O | O |
-| no_debate | O | O | O | X |
-| agent1_only | O | X | X | X |
-| agent2_only | X | O | X | X |
-| agent3_only | X | X | O | X |
-| no_agent3 | O | O | X | O |
+| 조건        | Semantic | Ego | Observer | Debate |
+| ----------- | -------- | --- | -------- | ------ |
+| full_system | O        | O   | O        | O      |
+| no_debate   | O        | O   | O        | X      |
+| agent1_only | O        | X   | X        | X      |
+| agent2_only | X        | O   | X        | X      |
+| agent3_only | X        | X   | O        | X      |
+| no_agent3   | O        | O   | X        | O      |
 
 결과: `outputs/ablation/<조건명>/`, 비교: `outputs/ablation/ablation_comparison.json`
 
@@ -264,14 +278,14 @@ Joint accuracy      — ground_truth에 있는 질문 모두 정답 시
 
 ## 설계 결정 사항
 
-| 항목 | 결정 | 이유 |
-|---|---|---|
-| 합의 체크 | Python 규칙 기반 | 문자열 일치 비교에 LLM 불필요 |
-| Lazy Supervisor | MAX rounds 초과 시만 LLM | 불필요한 LLM 호출 최소화 |
-| Supervisor — 시나리오 차단 | flags + reasoning만 전달 | 정답 유추 방지 → 정답 없는 현실 문제 적용 가능 |
-| Flag 누적 | ignored / accepted critique | Supervisor가 디베이트 패턴 분석 가능 |
-| Extractor 캐시 | `outputs/cache/` | 동일 시나리오 반복 실험 시 LLM 비용 절감 |
-| Observer Mode A/B | characters 수 + reasoning_type | 단일 인물 내면 분석 vs 다인물 관점 체인 분리 |
-| Agent 동시 실행 | asyncio + run_in_executor | 순수 Python 병렬성, LangGraph 미사용 |
-| 동점 tiebreak | Observer 우선 | 고차원 추론 전담 |
-| 결과 저장 | jsonl append | 실험 중단 후 재시작해도 누적 가능 |
+| 항목                       | 결정                           | 이유                                           |
+| -------------------------- | ------------------------------ | ---------------------------------------------- |
+| 합의 체크                  | Python 규칙 기반               | 문자열 일치 비교에 LLM 불필요                  |
+| Lazy Supervisor            | MAX rounds 초과 시만 LLM       | 불필요한 LLM 호출 최소화                       |
+| Supervisor — 시나리오 차단 | flags + reasoning만 전달       | 정답 유추 방지 → 정답 없는 현실 문제 적용 가능 |
+| Flag 누적                  | ignored / accepted critique    | Supervisor가 디베이트 패턴 분석 가능           |
+| Extractor 캐시             | `outputs/cache/`               | 동일 시나리오 반복 실험 시 LLM 비용 절감       |
+| Observer Mode A/B          | characters 수 + reasoning_type | 단일 인물 내면 분석 vs 다인물 관점 체인 분리   |
+| Agent 동시 실행            | asyncio + run_in_executor      | 순수 Python 병렬성, LangGraph 미사용           |
+| 동점 tiebreak              | Observer 우선                  | 고차원 추론 전담                               |
+| 결과 저장                  | jsonl append                   | 실험 중단 후 재시작해도 누적 가능              |

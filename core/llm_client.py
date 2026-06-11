@@ -11,9 +11,51 @@ config.yaml의 provider 설정만 바꾸면 OpenAI / Gemini / 기타 모델로 �
 """
 
 import logging
-from openai import OpenAI
+import time
+import threading
+from openai import OpenAI, RateLimitError
 
 logger = logging.getLogger(__name__)
+
+MODEL_PRICING = {
+    "gpt-3.5-turbo":  {"prompt": 0.50,  "completion": 1.50},
+    "gpt-4o-mini":    {"prompt": 0.15,  "completion": 0.60},
+    "gpt-4o":         {"prompt": 5.00,  "completion": 15.00},
+    "gpt-4":          {"prompt": 30.00, "completion": 60.00},
+}
+
+
+class TokenCounter:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    def add(self, prompt: int, completion: int):
+        with self._lock:
+            self.prompt_tokens += prompt
+            self.completion_tokens += completion
+
+    def reset(self):
+        with self._lock:
+            self.prompt_tokens = 0
+            self.completion_tokens = 0
+
+    def get(self):
+        with self._lock:
+            return self.prompt_tokens, self.completion_tokens
+
+    def cost(self, model: str) -> float:
+        pricing = MODEL_PRICING.get(model) or MODEL_PRICING.get("gpt-3.5-turbo")
+        p, c = self.get()
+        return (p * pricing["prompt"] + c * pricing["completion"]) / 1_000_000
+
+
+_thread_local = threading.local()
+
+
+def set_token_counter(counter: "TokenCounter | None") -> None:
+    _thread_local.active_counter = counter
 
 
 def get_llm_client(provider: str = "openai", base_url: str = None) -> OpenAI:
@@ -66,7 +108,8 @@ def call_llm(
     model: str,
     system_prompt: str,
     user_content: str,
-    max_tokens: int = 2000
+    max_tokens: int = 2000,
+    temperature: float = 0.0
 ) -> str:
     """
     통일된 LLM 호출 함수
@@ -78,23 +121,39 @@ def call_llm(
         system_prompt: 시스템 프롬프트
         user_content : 유저 메시지
         max_tokens   : 최대 토큰 수
+        temperature  : 샘플링 온도 (0.0 = 결정적)
 
     Returns:
         LLM 응답 텍스트
     """
-    response = client.chat.completions.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ]
-    )
-    usage = response.usage
-    if usage:
-        logger.info(
-            f"[LLMClient] tokens — prompt: {usage.prompt_tokens}, "
-            f"completion: {usage.completion_tokens}/{max_tokens} "
-            f"({'NEAR LIMIT' if usage.completion_tokens >= max_tokens * 0.9 else 'ok'})"
-        )
-    return response.choices[0].message.content
+    max_retries = 6
+    base_delay = 5.0
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ]
+            )
+            usage = response.usage
+            if usage:
+                logger.info(
+                    f"[LLMClient] tokens — prompt: {usage.prompt_tokens}, "
+                    f"completion: {usage.completion_tokens}/{max_tokens} "
+                    f"({'NEAR LIMIT' if usage.completion_tokens >= max_tokens * 0.9 else 'ok'})"
+                )
+                counter = getattr(_thread_local, "active_counter", None)
+                if counter is not None:
+                    counter.add(usage.prompt_tokens, usage.completion_tokens)
+            return response.choices[0].message.content
+        except RateLimitError:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"[LLMClient] Rate limit hit, retry {attempt + 1}/{max_retries - 1} in {delay:.0f}s")
+                time.sleep(delay)
+            else:
+                raise

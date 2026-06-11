@@ -19,9 +19,15 @@ system:
   #   필요 환경변수: CUSTOM_API_KEY (없으면 "none" 입력)
 
   provider: "openai"
-  model: "gpt-4o-mini"
-  max_tokens: 2000
+  model: "gpt-3.5-turbo"
+  max_tokens: 4000
+  temperature: 0.0
   base_url: null # custom provider일 때만 입력
+  temperature: 0
+  parallel_workers: 5 # 샘플 병렬 처리 수 (API rate limit 주의)
+
+supervisor:
+  use_correction: true
 
 debate:
   max_rounds: 3
