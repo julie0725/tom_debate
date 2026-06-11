@@ -13,6 +13,11 @@ const AGENT_COLORS = {
   agent2: "#4a6fa5",
   agent3: "#7a4f9a",
 };
+const AGENT_NAMES = {
+  agent1: "Semantic Agent",
+  agent2: "Ego Agent",
+  agent3: "Observer Agent",
+};
 
 function AgentNode({ id, pos, color, answer, active }) {
   return (
@@ -26,8 +31,8 @@ function AgentNode({ id, pos, color, answer, active }) {
         strokeWidth={2}
         style={{ transition: "fill 0.4s" }}
       />
-      <text x={pos.x} y={pos.y - 6} textAnchor="middle" fill={active ? "#fff" : color} fontSize={12} fontWeight={600}>
-        {id.replace("agent", "Agent ")}
+      <text x={pos.x} y={pos.y - 6} textAnchor="middle" fill={active ? "#fff" : color} fontSize={9} fontWeight={600}>
+        {AGENT_NAMES[id] || id}
       </text>
       <text x={pos.x} y={pos.y + 12} textAnchor="middle" fill={active ? "#fff" : "#888780"} fontSize={13} fontWeight={700}>
         {answer || "—"}
@@ -109,7 +114,7 @@ export default function DebateView() {
       setAnswers(newAnswers);
       setPhase("agent_answer");
       setArrows([]);
-      addLog("agent_answer", `초기 추론 완료 — ${Object.entries(newAnswers).map(([k,v]) => `${k}: ${v}`).join(", ")}`);
+      addLog("agent_answer", `초기 추론 완료 — ${Object.entries(newAnswers).map(([k,v]) => `${AGENT_NAMES[k] || k}: ${v}`).join(", ")}`);
     });
 
     es.addEventListener("critique", (e) => {
@@ -122,7 +127,7 @@ export default function DebateView() {
         for (const [tgt, text] of Object.entries(targets)) {
           if (text) {
             newArrows.push({ from: src, to: tgt, color: "#e07b3a", label: "critique" });
-            addLog("critique", `[R${data.round}] ${src} → ${tgt}: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
+            addLog("critique", `[R${data.round}] ${AGENT_NAMES[src] || src} → ${AGENT_NAMES[tgt] || tgt}: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
           }
         }
       }
@@ -132,6 +137,7 @@ export default function DebateView() {
     es.addEventListener("rebuttal", (e) => {
       const data = JSON.parse(e.data);
       setPhase("rebuttal");
+      setRound(data.round);
 
       const newAnswers = {};
       for (const [ak, ans] of Object.entries(data.answers_after)) {
@@ -139,11 +145,16 @@ export default function DebateView() {
       }
       setAnswers(newAnswers);
 
+      const allAgentIds = ["agent1", "agent2", "agent3"];
       const newArrows = [];
       for (const [ak, text] of Object.entries(data.rebuttals)) {
         if (text) {
-          newArrows.push({ from: ak, to: ak, color: "#4a6fa5", label: "rebuttal" });
-          addLog("rebuttal", `[R${data.round}] ${ak} rebuttal: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
+          for (const other of allAgentIds) {
+            if (other !== ak) {
+              newArrows.push({ from: ak, to: other, color: "#4a6fa5", label: "rebuttal" });
+            }
+          }
+          addLog("rebuttal", `[R${data.round}] ${AGENT_NAMES[ak] || ak} rebuttal: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
         }
       }
       setArrows(newArrows);
@@ -153,10 +164,15 @@ export default function DebateView() {
       const data = JSON.parse(e.data);
       setPhase("consensus");
       setArrows([]);
+      const mapStr = Object.entries(data.answer_map || {})
+        .map(([qid, votes]) =>
+          `${qid}: ${Object.entries(votes).map(([a, v]) => `${a}=${v}`).join(", ")}`
+        )
+        .join(" | ");
       if (data.agreement) {
-        addLog("consensus", `[R${data.round}] ✓ 합의 도달`);
+        addLog("consensus", `[R${data.round}] ✓ 합의 도달${mapStr ? ` — ${mapStr}` : ""}`);
       } else {
-        addLog("consensus", `[R${data.round}] ✗ 합의 실패 — 다음 라운드 또는 majority vote`);
+        addLog("consensus", `[R${data.round}] ✗ 합의 실패${mapStr ? ` — ${mapStr}` : ""} — 다음 라운드 또는 majority vote`);
       }
     });
 
@@ -261,7 +277,8 @@ function logTypeStyle(type) {
 
 const s = {
   root: {
-    minHeight: "100vh",
+    height: "100vh",        // minHeight → height 로 변경
+    overflow: "hidden",     // 추가
     background: "#f5f4f0",
     fontFamily: "'IBM Plex Sans', 'Noto Sans KR', sans-serif",
     display: "flex",
@@ -299,20 +316,23 @@ const s = {
     flex: 1,
     overflow: "hidden",
     height: "calc(100vh - 57px)",
+    minHeight: 0,
   },
   graphPanel: {
-    width: 420,
-    minWidth: 420,
+    flex: 0.8,
     borderRight: "0.5px solid #d3d1c7",
     background: "#fff",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
+    height: "100%",
   },
   logPanel: {
     flex: 1,
     overflowY: "auto",
+    height: "100%",
+    minHeight: 0,
     padding: "16px 20px",
     display: "flex",
     flexDirection: "column",
