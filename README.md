@@ -67,6 +67,7 @@ hitom → outputs/results_hitom/
 > 전처리 스크립트 불필요 — Adapter가 원본 파일을 직접 읽음
 
 ---
+---
 
 ## 프로젝트 구조
 
